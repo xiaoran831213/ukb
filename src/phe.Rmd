@@ -1,7 +1,9 @@
 ---
 title: "UK Biobank Phenotype"
 author: "xiaoran"
-output: "html_document"
+output:
+    html_document:
+        toc: TRUE
 ---
 
 # Preparation
@@ -1341,7 +1343,7 @@ done
 
 # Summary
 
-That is all the phenotypes we care about for now. 
+Use R-script to summarize phenotypes extracted so far.
 
 ```{R, eval=FALSE}
 scn <- function(., w) scan(., w, sep='\t', skip=1, quiet=TRUE, blank.lines.skip=FALSE)
@@ -1421,39 +1423,4 @@ out <- with(fmt,
 
 ## name of outcomes
 wtb(out, "dat/phe/phe.fmt")
-```
-
-# Unique identifiers
-
-UKB might assign have assembled different sets of subject id for
-different data applicants, to facilicate collaberation, we use age,
-sex, year of birth, etc, to uniquely mark each individual.
-
-```{sh, eval=FALSE}
-w=$GRP/ukb/dat/phe; cd $w       # working direcotry
-mkdir -p uid
-
-cp eid.col uid/eid.txt # eid
-zcat 001.txt.gz | cut -f3097  > uid/age.txt # 21022, age at recruitment
-zcat 001.txt.gz | cut -f1     > uid/sex.txt # 31,    sex
-zcat 001.txt.gz | cut -f2     > uid/yob.txt # 34,    year of birth
-
-# 40 principle components
-ln -sf $w/gno/pcs.txt uid/pcs.txt  # genome principle component
-```
-Arrange the proposed identifiers into a single R dataset
-```{r, eval=FALSE}
-setwd('/mnt/research/StatGen/ukb/dat/phe')
-eid <- scan("uid/eid.txt", 0L, skip=1)
-age <- scan("uid/age.txt", 0L, skip=1)
-sex <- scan("uid/sex.txt", 0L, skip=1)
-yob <- scan("uid/yob.txt", 0L, skip=1)
-pcs <- read.delim("uid/pcs.txt")
-
-uid <- cbind(eid, age, sex, yob, pcs)
-n1 <- c("EID", "AGE", "SEX", "YOB")
-n2 <- sprintf("P%02d", seq(40))
-names(uid) <- c(n1, n2)
-rownames(uid) <- uid$EID
-saveRDS(uid, "uid.rds")
 ```
