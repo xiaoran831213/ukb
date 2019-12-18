@@ -6,28 +6,28 @@ output: "html_document"
 
 # Preparation
 
-Make sure the phenotype main data file has been download from UKB,
-decrypted, converted to texture format under __{s}/ukb/dwn__, where
-{s} denotes scratch space. See __"dwn.Rmd"__ for more details.
+Make sure  the phenotype main data  file has been download  from UKB, decrypted,
+converted to  texture format  under __{s}/ukb/dwn__,  where {s}  denotes scratch
+space. See __"dwn.Rmd"__ for more details.
 
-In our particular case, the texture phenotype data was saved as
+In   our  particular   case,   the   texture  phenotype   data   was  saved   as
 __"enc_ukb.out.txt"__ under __{s}/ukb/dwn__.
 
-__!__ cautious: if we decide to use MSU's genotype instead of
-downloading it, we have to at least download the __*.fam*__ from the
-current release assigned to us, only then the __IID__ of the genotype
-is able to match the __eid__ of the phenotype.
+__!__ cautious: if we decide to use MSU's genotype instead of downloading it, we
+have to  at least download the  __*.fam*__ from the current  release assigned to
+us, only then  the __IID__ of the genotype  is able to match the  __eid__ of the
+phenotype.
 
-Make sure the the code book __"enc_ukb.out.html"__ is also extracted
-from the decrypted data, which is helpful for looking up variables.
+Make sure  the the code book  __"enc_ukb.out.html"__ is also extracted  from the
+decrypted data, which is helpful for looking up variables.
 
 Starting from the texture data __"enc_ukb.out.txt"__, we first
 
  1. carve out individual ID -- the first column __"eid"__;
  2. compress the remaining columns to conserve space.
  
-Both parts will be saved under project directory __{p}/dat/phe__ for
-long term use.
+Both parts will  be saved under project directory __{p}/dat/phe__  for long term
+use.
 
 List of useful environment variables and documents:
 
@@ -48,8 +48,8 @@ without the 1st column __"eid"__, the indices of the remaining
 columns in __"001.txt.gz"__ are now aligned exactly with the
 column numbers listed in the codebook __"enc_ukb.out.html"__.
 
-The following sections will go through the extraction and
-preprocessing of phenotypes.
+The  following sections  will go  through  the extraction  and preprocessing  of
+phenotypes.
 
 # Visits
 
@@ -83,8 +83,7 @@ These variables are frequently included in almost all analysis:
   * Ethnic Group
     - COL=3090, UID=21000-0.0, N=501692
     - Catigorical Single
-  * 1 = white, 1001 = British, 1002 = Irish, 1003 = any other
-    white background;
+  * 1 = white, 1001 = British, 1002 = Irish, 1003 = any other white background;
   * 2 = Mixed
     - 2001 = White and Black Caribbean
     - 2002 = White and Black African
@@ -117,6 +116,7 @@ These variables are frequently included in almost all analysis:
 
 __the extraction script:__
 
+
 ```{sh, eval=FALSE}
 w=$GRP/ukb/dat/phe; cd $w
 mkdir -p dmg
@@ -126,10 +126,10 @@ zcat 001.txt.gz | cut -f3090   > dmg/eth.txt
 zcat 001.txt.gz | cut -f207    > dmg/inc.txt
 ```
 
-Based on variable __21000:Ethnic Group__, derive a mask of European
-ancestory that highlights individuals who are __1=white__, or
-__1001=British__, or __1002=Irish__, or __1003=any other white
-background__.
+Based on  variable __21000:Ethnic Group__,  derive a mask of  European ancestory
+that  highlights  individuals  who  are  __1=white__,  or  __1001=British__,  or
+__1002=Irish__, or __1003=any other white background__.
+
 
 ```{sh, eval=FALSE}
 w=$GRP/ukb/dat/phe; cd $w
@@ -139,9 +139,10 @@ else if($1<0 || $1=="") {print $1} \
 else if($1~/^1.*$/) {print 1}
 else {print 0}}' >dmg/eur.txt
 ```
-The mask is saved as __eur.txt__, where 1=European, 0=otherwise. Here
-we list the sample size of each category in UKB provided by variable
-__eth__ and the self derived mask __eur__:
+
+The mask  is saved as __eur.txt__,  where 1=European, 0=otherwise. Here  we list
+the sample  size of each  category in UKB provided  by variable __eth__  and the
+self derived mask __eur__:
 
 ```{sh, eval=TRUE}
 w=$GRP/ukb/dat/phe; cd $w
@@ -183,6 +184,7 @@ zcat 001.txt.gz | cut -f3107-3146 > gno/pcs.txt # principal components
 ```
 
 Here are the counts for kinship and genotyping outliers:
+
 ```{sh, eval=TRUE}
 w=$GRP/ukb/dat/phe; cd $w
 echo "kinship:"
@@ -193,29 +195,29 @@ tail -n+2 gno/out.txt | sort | uniq -c | sort -k2,2n
 
 ## Mark Unrelatedness
 
-To extract unrelated samples, we break each kinship by marking
-all but one of the relatives for removal. 
+To extract unrelated  samples, we break each  kinship by marking all  but one of
+the relatives for removal.
 
-UKB prepared genetic kinship matrix for highly related individuals,
-which have been saved as __{p}/dat/rel.txt__. See section
-**Relatedness** in __dwn.Rmd__ for details.
+UKB prepared genetic  kinship matrix for highly related  individuals, which have
+been saved  as __{p}/dat/rel.txt__.  See section **Relatedness**  in __dwn.Rmd__
+for details.
 
 There are 5 columns in __{p}/dat/rel.txt__:
 
   1. ID1: ID for the first individual of the pair
   2. ID2: ID for the second individual of the pair
   3. HetHet: Proportion of SNPs with double heterozygotes (e.g., AG and AG)
-  4. IBS0: Porportion of SNPs with zero IBS (identical-by-state) (e.g., AA and GG)
+  4. IBS0: Porportion  of SNPs with zero IBS (identical-by-state)  (e.g., AA and
+     GG)
   5. Kinship: Estimated kinship coefficient from the SNP data
 
 We will work on the first two columns (ID1 and ID2).
 
-__note:__ the ID of non-zero, non-blank entries in __gno/kin.txt__,
-produced in the previous section __Genotype Quality__, are identical
-to those appeared in __{p}/dat/rel.txt__, which validates that UKB
-only present relationship measures (i.e., IBS, kinship) for
-individuals who are sufficiently close, that is, __"rel.txt"__
-represents a rather sparse relatedness matrix.
+__note:__ the ID of non-zero,  non-blank entries in __gno/kin.txt__, produced in
+the previous  section __Genotype Quality__,  are identical to those  appeared in
+__{p}/dat/rel.txt__, which validates that UKB only present relationship measures
+(i.e.,  IBS, kinship)  for  individuals  who are  sufficiently  close, that  is,
+__"rel.txt"__ represents a rather sparse relatedness matrix.
 
 
 ```{sh, eval=FALSE}
@@ -244,29 +246,28 @@ __gno/ur2.txt__.
 ## UKB Provided
 
   * DBP, auto-reading, Integer
-    - Visit 0 (baseline), 
+    - Visit 0 (baseline),
       * COL=726, UID=4079-0.0, N=468,148, reading 1
       * COL=727, UID=4079-0.1, N=461,365, reading 2
-    - Visit 1, 
+    - Visit 1,
       * COL=728, UID=4079-1.0, N= 20,195, reading 1
       * COL=729, UID=4079-1.1, N= 20,203, reading 2
-    - Visit 2, 
+    - Visit 2,
       * COL=730, UID=4079-2.0, N= 19,555, reading 1
       * COL=731, UID=4079-2.1, N= 19,508, reading 2
 
   * SBP, auto-reading, Integer
-    - Visit 0 (baseline), 
+    - Visit 0 (baseline),
       * COL=732, UID=4080-0.0, N=468,135, reading 1
       * COL=733, UID=4080-0.1, N=461,361, reading 2
-    - Visit 1, 
+    - Visit 1,
       * COL=734, UID=4080-1.0, N= 20,189, reading 1
       * COL=735, UID=4080-1.1, N= 20,202, reading 2
-    - Visit 2, 
+    - Visit 2,
       * COL=736, UID=4080-2.0, N= 19,555, reading 1
       * COL=737, UID=4080-2.1, N= 19,507, reading 2
     
-for now, we use the 2nd auto-reading to counter "doctor's
-bias".
+for now, we use the 2nd auto-reading to counter "doctor's bias".
 
 ```{sh, eval=FALSE}
 w=$GRP/ukb/dat/phe; cd $w	# working direcotry
@@ -306,42 +307,38 @@ ln -s sbp/v00.txt sbp.txt       # default to visit 0
       *  3=Just tried once or twice
       *  4=I have never smoked
       * -3=Prefer not to answer
-    - only ask current non-smoker or ocassional smokers, that
-    is, those who answered other than __1=Smoked on most or all
-    days__ on __1239: current smoking__.
+    - only  ask current  non-smoker or  ocassional smokers,  that is,  those who
+    answered other  than __1=Smoked  on most  or all  days__ on  __1239: current
+    smoking__.
 
   * light smoker? (least 100 smokes in lifetime)
     - COL=561, UID=2644-0.0, N=137581;
-    - Categorical (single), 1=Yes, 0=No, -1=Do not know, -3=
-    Prefer not to answer;
-    - only ask past non smoker or ocassional smokers, that is,
-    those who answered __2=smoked occasionally__ or __3=Just
-    tried once or twice__ on __1249: past smoking__.
+    -  Categorical (single),  1=Yes, 0=No,  -1=Do not  know, -3=  Prefer not  to
+    answer;
+    -  only ask  past  non smoker  or  ocassional smokers,  that  is, those  who
+    answered  __2=smoked occasionally__  or __3=Just  tried once  or twice__  on
+    __1249: past smoking__.
 
   * ever smoking (binary)
     - COL=2395, UID=20160-0.0, N=499704;
     - Categorical (single), 1=Yes, 0=No;
-    - Derived from __1239: current tobacco smoking__ and
-    __1249: past smoking__;
-    - those answed __-1=Do not know__, __-3=Prefer not to
-    answer__, and __-7=None of the above__, were not coded (left
-    empty)
+    - Derived from __1239: current tobacco smoking__ and __1249: past smoking__;
+    -  those  answed  __-1=Do  not  know__, __-3=Prefer  not  to  answer__,  and
+    __-7=None of the above__, were not coded (left empty)
 
   * pack years of smoking (accumulative)
     - COL=2398, UID=20161-0.0, N=150965
     - Continuous
-    - derived for individuals ever smoked (2395, 1=YES), who
-    indicated that they __"1=Yes, on most or all days"__
-    currently (1239), or __"1=Smoked on most or all days"__ in the
-    past (1249).
+    - derived for individuals ever smoked (2395, 1=YES), who indicated that they
+    __"1=Yes, on most or all days"__ currently (1239), or __"1=Smoked on most or
+    all days"__ in the past (1249).
       * cigarette per day / 20 * (Age stop - Age start)
-      * cigarette per day / 20 * (Age stop - Age start - 0.5) for
-      individuals who	gave up smoking for more than 6 Months;
+      * cigarette per  day / 20 * (Age  stop - Age start -  0.5) for individuals
+      who gave up smoking for more than 6 Months;
     - Age start is capped at 16;
     - coded __empty__ for those who smoked but gave up before 16;
-    - coded __0__ for those who have given up smoking for more
-    than 6 Months in the same year they
-    started smoking.
+    - coded __0__ for those who have given  up smoking for more than 6 Months in
+    the same year they started smoking.
 
   * packs per year of smoking (density)
     - COL=2401, UID=20162-0.0, N=150965
@@ -362,15 +359,14 @@ zcat 001.txt.gz | cut -f2401 > smk/ppy.txt # pack / year
 
 ## Self Derived
 
-Fill the blanks in __20161: pack years of smoking__,
-and __20162: pack per year of smoking__,
+Fill the blanks in __20161: pack years  of smoking__, and __20162: pack per year
+of smoking__,
 
-  * for individuals who are reportedly light or never smokers, set
-  both __20161__ and __20162__ to **0**.
+  *  for  individuals who  are  reportedly  light  or  never smokers,  set  both
+  __20161__ and __20162__ to **0**.
   * the rest are left as they were;
-  * to identify light smokers and never smokers, check non-empty
-  entries in __20160: ever smoking__ which has been saved as
-  __"smk/bin"__.
+  * to  identify light  smokers and  never smokers,  check non-empty  entries in
+  __20160: ever smoking__ which has been saved as __"smk/bin"__.
 
 ```{sh, eval=FALSE}
 p=$GRP/ukb; w=$p/dat/phe; cd $w
@@ -384,8 +380,8 @@ paste smk/{ppy,bin}.txt | tail -n+2 | \
 The derived varialbes are samed as __"smk/acc.txt"__ (accumulation),
 and __"smk/frq.txt"__ (frequency), respectively.
 
-Here we show the number of blanks for UKB provided variables versus
-self-derived ones:
+Here we show the number of blanks for UKB provided variables versus self-derived
+ones:
 
 ### Accumulated Smoking
 ```{sh}
@@ -405,7 +401,7 @@ grep -c "^$" smk/frq.txt    # self derived
 
 ## UKB Provided
 
-__Alcohol Intake Frequency__
+### Alcohol Intake Frequency
 
   * COL=423, UID=1558-0.0, N=501693;
   * Categorical (single)
@@ -424,11 +420,10 @@ zcat 001.txt.gz | cut -f423  > alc/int.txt # retrive
 tail -n+2 alc/int.txt | sort -n | uniq -c  # counts
 ```
 
-__Weekly Drinkers__
+### Weekly Drinkers
 
-How many glasses per week? Collected from participants
-who reportedly drink more than once or twice a week,
-defined by answering 1, 2, or 3 for __1558: Alcohol
+How many glasses per week? Collected from participants who reportedly drink more
+than once or twice a week, defined by answering 1, 2, or 3 for __1558: Alcohol
 Intake Freuency__.
 
   * Average weekly red wine intake
@@ -471,12 +466,11 @@ zcat 001.txt.gz | cut -f435  > alc/wek/spr.txt # spirits
 zcat 001.txt.gz | cut -f438  > alc/wek/ftw.txt # fortified wine
 ```
 
-__Monthly Drinkers__
+## Monthly Drinkers
 
-How many glasses per month? Collected from those who
-reportedly drink on special occasions or one to three
-times a month, as defined by answering 4 or 5 on __1558:
-Alcohol Intake Frequency__.
+How many glasses per month? Collected from those who reportedly drink on special
+occasions or  one to  three times a  month, as  defined by answering  4 or  5 on
+__1558: Alcohol Intake Frequency__.
 
   * Average monthly red wine intake
     - COL=1314, UID=4407-0.0, N=40838
@@ -519,20 +513,20 @@ zcat 001.txt.gz | cut -f1326  > alc/mon/ftw.txt # fortified wine
 
 ## Self Derived
 
-We would like to derive the combined average units of alchohol
-consuption per week.
+We would  like to derive the  combined average units of  alchohol consuption per
+week.
 
   * _beer plus cider_ is considered 2 units of alcohol;
   * the rest are considered 1 units of alcohol;
-  * the monthly drinker's units is converted to weekly standards, by
-  multiplying with 12 then dividing with 52.
-  * blanks in specific alcohol items are treated as 0 glass per week
-  or per month, since they resulted from answing __6=Never__ or
-  __-3=Prefer not to answer__ for __1558: Alcohol Intake Frequency__.
-  * answering __"-1=Do not know"__ for any alcohol item is also seen
-  as 0 glass per week or per month.
-  * answering __"-3=Prefer not to answer"__ for any alcohol item is
-  treated as missing.
+  * the monthly drinker's units is converted to weekly standards, by multiplying
+  with 12 then dividing with 52.
+  * blanks  in specific alcohol  items are  treated as 0  glass per week  or per
+  month,  since they  resulted from  answing __6=Never__  or __-3=Prefer  not to
+  answer__ for __1558: Alcohol Intake Frequency__.
+  * answering __"-1=Do not know"__ for any  alcohol item is also seen as 0 glass
+  per week or per month.
+  * answering __"-3=Prefer  not to answer"__ for any alcohol  item is treated as
+  missing.
 
 ```{sh, eval=FALSE}
 cd $GRP/ukb/dat/phe
@@ -564,12 +558,11 @@ NR >1 {
 ```
 There are some nuanse here:
 
-  * Despite weekly drinkers always reporting at least one item
-  specific consumption, the majority of monthly drinkers reported
-  none, even if they had chosen __4=one to three times per month__ or
-  __5=on special occasions only__ for __1558__. For monthly drinkers
-  that answered none of the item specific consumption, we let their
-  sum of alcohol unit per month be 0.
+  *  Despite  weekly  drinkers  always  reporting at  least  one  item  specific
+  consumption, the majority of monthly drinkers  reported none, even if they had
+  chosen __4=one to  three times per month__ or __5=on  special occasions only__
+  for __1558__.  For monthly drinkers  that answered  none of the  item specific
+  consumption, we let their sum of alcohol unit per month be 0.
   * when GNU awk does addition, it treats blanks as 0s.
 
 # Cannabis Use
@@ -585,9 +578,8 @@ There are some nuanse here:
       * 3=Yes, 11-100 times
       * 4=Yes, more than 100 times
       * -818=Prefer not to answer
-    - Question asked: "Have you taken CANNABIS (marijuana, grass, hash,
-    ganja, blow, draw, skunk, weed, spliff, dope), even if it was a long
-    time ago?"
+    - Question asked:  "Have you taken CANNABIS (marijuana,  grass, hash, ganja,
+    blow, draw, skunk, weed, spliff, dope), even if it was a long time ago?"
 
   * Maximum frequency of taking cannabis
     - COL=2955, UID=20454-0.0, N=34887
@@ -598,10 +590,10 @@ There are some nuanse here:
       * 4=Every day
       * -818=Prefer not to answer
       * -121=Do not know
-    - Question asked: "Considering when you were taking cannabis most
-    regularly, how often did you take it?"
-    - Question was asked unless the answer to __20453: Ever taken
-    cannabis__ was __0=No__.
+    - Question asked: "Considering when you were taking cannabis most regularly,
+    how often did you take it?"
+    - Question was asked unless the answer to __20453: Ever taken cannabis__ was
+    __0=No__.
 	
 ```{sh, eval=FALSE}
 cd $GRP/ukb/dat/phe
@@ -612,14 +604,13 @@ zcat 001.txt.gz | cut -f2955  > cnb/max.txt # max frequency
 	
 ## Self Derived
 
-Create a cannibus frequency measure by modifying the entries in
-__20454: Maximum frequency of taking cannabis__, that is, those who
-answered __0=No__ to __20453:__ Ever taken cannabis__ is given a value
-of 0; those who answed -818 or -121 for __20454: Maximum frequency of
-taking cannabis__ are set to blank (NA).
+Create a cannibus frequency measure by modifying the entries in __20454: Maximum
+frequency  of  taking  cannabis__,  that  is, those  who  answered  __0=No__  to
+__20453:__ Ever taken cannabis__ is given a value of 0; those who answed -818 or
+-121 for __20454: Maximum frequency of taking cannabis__ are set to blank (NA).
 
-When done, make this variable as the representative of cannibus
-through soft link.
+When done,  make this variable  as the  representative of cannibus  through soft
+link.
 
 ```{sh, eval=FALSE}
 cd $GRP/ukb/dat/phe
@@ -633,24 +624,20 @@ ln -sf cnb/frq.txt cnb.txt
 
 We use variable directly from UKB. They are all continuous.
 
-  * v00: 3340 25000-2.0 14520 Volumetric scaling from
-    T1 head image to standard space
-  * v01: 3341 25001-2.0 14520 peripheral cortical grey
-    matter (normalised for head size)
-  * v02: 3342 25002-2.0 14520 peripheral cortical grey
-    matter
-  * v03: 3343 25003-2.0 14520 ventricular cerebrospinal
-    fluid (normalised for head size)
-  * v04: 3344 25004-2.0 14520 ventricular cerebrospinal
-    fluid
-  * v05: 3345 25005-2.0 14520 grey matter (normalised
-    for head size)
+  * v00: 3340 25000-2.0 14520 Volumetric  scaling from T1 head image to standard
+    space
+  * v01:  3341 25001-2.0 14520  peripheral cortical grey matter  (normalised for
+    head size)
+  * v02: 3342 25002-2.0 14520 peripheral cortical grey matter
+  * v03:  3343 25003-2.0 14520  ventricular cerebrospinal fluid  (normalised for
+    head size)
+  * v04: 3344 25004-2.0 14520 ventricular cerebrospinal fluid
+  * v05: 3345 25005-2.0 14520 grey matter (normalised for head size)
   * v06: 3346 25006-2.0 14520 grey matter
-  * v07: 3347 25007-2.0 14520 white matter (normalised
-    for head size)
+  * v07: 3347 25007-2.0 14520 white matter (normalised for head size)
   * v08: 3348 25008-2.0 14520 white matter
-  * v09: 3349 25009-2.0 14520 brain, grey+white matter
-    (normalised for head size)
+  *  v09: 3349  25009-2.0 14520  brain, grey+white  matter (normalised  for head
+    size)
   * v10: 3350 25010-2.0 14520 brain, grey+white matter
   * v11: 3351 25011-2.0 14503 thalamus (left)
   * v12: 3352 25012-2.0 14503 thalamus (right)
@@ -685,14 +672,13 @@ rm -rf bvl.txt
 
 ## UKB Provided
   
-  * cholesterol, blood pressure, diabetes, or take
-  exogenous hormones
+  * cholesterol, blood pressure, diabetes, or take exogenous hormones
     - female version of field 6177
     - Categorical (multiple)
       * COL=1554, UID=6153-0.0, N=270,909
       * COL=1555, UID=6153-0.1, N= 24,602
-      * COL=1556, UID=6153-0.2, N=  2,415
-      * COL=1557, UID=6153-0.3, N=     93
+      * COL=1556, UID=6153-0.2, N= 2,415
+      * COL=1557, UID=6153-0.3, N= 93
     - Choices (8)
       *  1=Cholesterol lowering medication
       *  2=Blood pressure medication
@@ -708,9 +694,9 @@ rm -rf bvl.txt
       * COL=1566, UID=6154-0.0, N=497,883
       * COL=1567, UID=6154-0.1, N= 71,518
       * COL=1568, UID=6154-0.2, N= 13,370
-      * COL=1569, UID=6154-0.3, N=  1,581
-      * COL=1570, UID=6154-0.4, N=    155
-      * COL=1571, UID=6154-0.5, N=     14
+      * COL=1569, UID=6154-0.3, N= 1,581
+      * COL=1570, UID=6154-0.4, N= 155
+      * COL=1571, UID=6154-0.5, N= 14
     - Choices (9)
       *  1=Aspirin
       *  2=Ibuprofen (e.g. Nurofen)
@@ -724,10 +710,10 @@ rm -rf bvl.txt
 
   * cholesterol, blood pressure or diabetes
     - male version of field 6153
-    - Categorical (multiple) 
+    - Categorical (multiple)
       * COL=1668, UID=6177-0.0, N=226,975
       * COL=1669, UID=6177-0.1, N= 34,433
-      * COL=1670, UID=6177-0.2, N=  1,922
+      * COL=1670, UID=6177-0.2, N= 1,922
     - Choices (6)
       *  1=Cholesterol lowering medication
       *  2=Blood pressure medication
@@ -739,9 +725,9 @@ rm -rf bvl.txt
 
 # Non-cancer illness at baseline
 
-This is a compounded phenotype organized in a hierarchy, presented as
-29 columns of choices. Its extraction and reformating will be diffcult
-and much more scripting is required.
+This is a compounded phenotype organized in a hierarchy, presented as 29 columns
+of  choices. Its  extraction  and reformating  will be  diffcult  and much  more
+scripting is required.
 
 ## UKB provided
 
@@ -749,10 +735,10 @@ and much more scripting is required.
     - COL=2073, UID= 20002-0.0, N=375,103
     - COL=2074, UID= 20002-0.1, N=241,006
     - ...
-    - COL=2101, UID=20002-0.28, N=      1
+    - COL=2101, UID=20002-0.28, N= 1
   
-Extract all 29 columes and save as __{p}/dat/phe/ill/raw__, where {p}
-denotes project root.
+Extract all  29 columes and  save as __{p}/dat/phe/ill/raw__, where  {p} denotes
+project root.
 
 ```{sh, eval=FALSE}
 p=$GRP/ukb; w=$p/dat/phe; cd $w
@@ -762,18 +748,17 @@ zcat 001.txt.gz | cut -f2073-2101 > ill/raw
 
 Comming next are a few objectives:
 
-  * each illnesses should have its own corresponding single column
-    file as a phenotype, coupled with some meta data files;
-  * the phenotype and meta data should be organized in directories
-  that mirrors the classification and hierarchy of illness;
-  * since most illnesses have been selected by only a few fraction of
-  UKB participants, one should aggregate them into more general class
-  to achive large number of cases.
+  * each  illnesses should have  its own corresponding  single column file  as a
+    phenotype, coupled with some meta data files;
+  * the phenotype and meta data  should be organized in directories that mirrors
+  the classification and hierarchy of illness;
+  *  since  most illnesses  have been  selected by  only a  few fraction  of UKB
+  participants,  one should  aggregate them  into more  general class  to achive
+  large number of cases.
 
-Went to http://biobank.ndph.ox.ac.uk/showcase/coding.cgi?id=6 and
-pressed the __download__ button to retrive a TSV file which is the
-code book and hierarchy of illnesses. We removed its header and saved
-it as __{p}/dat/phe/ill/fds__.
+Went  to http://biobank.ndph.ox.ac.uk/showcase/coding.cgi?id=6  and pressed  the
+__download__ button to retrive  a TSV file which is the  code book and hierarchy
+of illnesses. We removed its header and saved it as __{p}/dat/phe/ill/fds__.
 
 
 ```{sh, eval=FALSE}
@@ -897,10 +882,10 @@ tree -d root
 
 Each illness' own directory has the following:
 
-  * __phe__: basic binary phenotype file of a single column and a
-    header.  The __phe__ file is only available for selectible nodes
-    (i.e., excluding general node like cardiovascular,
-    respiratory/ent, and cerebrovascular disease)
+  * __phe__: basic binary  phenotype file of a single column  and a header.  The
+    __phe__ file is only available for selectible nodes (i.e., excluding general
+    node like cardiovascular, respiratory/ent, and cerebrovascular disease)
+
   * __agg__: aggregation of child illnesses. For the most specific one
     (i.e., the leave nodes), __agg__ is a link to the corresponding
     __phe__ file; for any parent illness, an __agg__ is the sum of its
