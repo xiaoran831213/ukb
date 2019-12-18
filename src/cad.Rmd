@@ -1,0 +1,295 @@
+---
+title: "UK Biobank CAD anslysis"
+author: "xiaoran"
+output: "html_document"
+theme: united
+---
+
+One of the phenotypes in UKB, Coronary Artery Disease (CAD), are
+provided by Dr. Wu's Lab, which was derived from many data, including
+ICD9, ICD10, self-report, and diagnosis, and undergone rigorous
+quality control to achieve high accuracy. 
+
+The cleaned CAD and related data are put under __{p}/dat/phe/cad__,
+where {p} is the root directory of UKB related project.
+
+Here is a brief description:
+
+  * CAD_processed.RDat: processed CAD phenotype
+    1. cad.inf: officially diagnosed CAD cases
+    2. neg.id : infered CAD cases, if not diagnosed, should be removed
+    from the controls to avoid false negatives.
+  * CAD_common_cov_lv.RData: covariate accompanying the CAD data, from
+    Dr. Wu's copy of UKB;
+  * gwas-association-CAD.tsv: significant variants to CAD;
+  * Date_of_attending_assessment_centre.tab: date of baseline visit in
+  MM-DD-YY string format.
+
+
+# Sample ID match
+
+Maybe it was due to UKB's policy, or MSU's meddeling, the sample ID
+(__eid__) in our copy of UKB data are totally different form our
+collaborator's. To enable cooperation, we must find the correspondance
+between sample ID of the two datasets.
+
+Hopefully, with enough covariants, one should be able to derive an
+unique identifier (UID) for each sample.
+
+Here are the covariants we choose:
+
+  * for UID derivation: use 40 genetic principle components of the
+    latest variant call;
+  * varification: sex, age, date attending assessment center; if the
+    UID derived from 40 PC is valid, these extra variable should be
+    perfectly matched as well.
+  * sample ID (__eid__): to create mapping for both UKB copies.
+  
+To derive an UID for each sample from 40 PCs, we use **MD5** checksum,
+make sure the R package **digest** is installed.
+
+```{r, eval=FALSE}
+setwd('/mnt/research/StatGen/ukb') # project directory
+setwd('dat/phe')                   # working directory - phenotypes
+options(stringsAsFactors=FALSE)    # save a lot of pain
+
+## read UKB copy No.1: DR. Wu's CAD data
+## 1) mix <- eid, age, sex, and 40 PCs:
+load("cad/CAD_common_cov_lv.RData")
+pcs <- out[, sprintf("PCA%d", seq(40))]
+names(pcs) <- sprintf("p%02d", seq(40))
+out <- with(out, data.frame(eid=eid, age=Age, sex=as.integer(as.character(Gender)), pcs))
+## 2) v00 <- eid and date of visit (the baseline)
+v00 <- read.delim("cad/Date_of_attending_assessment_centre.tab")[, 1:2]
+names(v00) <- c("eid", "v00")
+## 3) cp1 <- eid, dv1, age, sex, and 40 PCs, as UKB copy No. 1
+cp1 <- merge(v00, out, by=1)
+
+
+## read UKB copy No.2: our own data
+cp2 <- data.frame(
+    eid=scan("eid.col", 0L, skip=1),
+    v00=scan("dov/v00.txt", "", skip=1),
+    age=scan("age.txt", 0L, skip=1),
+    sex=scan("sex.txt", 0L, skip=1),
+    readRDS("gno/pcs.rds"))
+row.names(cp2) <- NULL
+
+
+## Derive UID from 40 PCs, ignore samples with no PC.
+## 1) calculate MD5 check sum of PCs
+library(digest)
+ui1 <- apply(subset(cp1, !is.na(p01), p01:p40), 1L, digest) # for UKB copy 1
+ui2 <- apply(subset(cp2, !is.na(p01), p01:p40), 1L, digest) # for UKB copy 2
+## 2) see if MD5 from 40 PCs truely unique for each sample.
+stopifnot(length(ui1) == length(unique(ui1)))
+stopifnot(length(ui2) == length(unique(ui2)))
+## 3) assign UID, drop PCs
+cp1 <- cbind(uid=ui1, subset(cp1, !is.na(p01), -c(p01:p40)))
+cp2 <- cbind(uid=ui2, subset(cp2, !is.na(p01), -c(p01:p40)))
+
+
+## 1st validation: are UIDs shared between the two UKB copies?
+mrg <- merge(cp1, cp2, by=1, suffixes=c('.cp1', '.cp2'))
+cat(round(nrow(mrg) / length(ui1) * 100, 2), "% UID shared by copy 1\n")
+cat(round(nrow(mrg) / length(ui2) * 100, 2), "% UID shared by copy 2\n")
+
+## 2nd valication: are age, sex, and visiting date matched?
+cat(with(mrg, mean(age.cp1 == age.cp2) * 100), "% matched age.\n")
+cat(with(mrg, mean(sex.cp1 == sex.cp2) * 100), "% matched sex.\n")
+cat(with(mrg, mean(v00.cp1 == v00.cp2) * 100), "% matched v00.\n")
+
+
+## find eid in CAD data (cp1) corresponding to eid in our copy (cp2),
+## write failed mappings as blanks.
+
+## 1) eid in the order of local UKB copy, with or without PC
+eid.cp2 <- scan("eid.col", 0L, skip=1)
+## 2) from local eid (col 1) to CAD eid (col 2, blank if unmatched)
+map <- merge(eid.cp2, mrg[, c('eid.cp2', 'eid.cp1')], by=1, all.x=TRUE)
+eid.cp1 <- data.frame(eid.cad=map[, 2])
+write.table(eid.cp1, "cad/eid.txt", quote=FALSE, na="", row.names=FALSE)
+```
+
+When done, file __{p}/dat/phe/cad/eid.txt__ should appear, with the
+vector of **eid** in CAD data, corresponding to **eid** in the local
+copy of UKB, leaving unmatched ones blank.
+
+During the validation, the date of baseline visit are all matched, a
+tiny fraction of samples have sex and age mismatched, this can be the
+artifact cauased by UKB. For now we trust the matching of UID derived
+from 40 PCs.
+
+## Arrange CAD data
+
+From __{p}/dat/phe/cad/CAD_processed.RDat__, gather the following:
+
+  * eid: __eid__ of CAD cases (1st in cad.inf);
+  * dia: diagnosed with certainty (listed by cad.inf);
+  * sus: suspected case that may not yet diagnosed (listed by neg.id).
+
+With these information, write down the phenotype vector of cases,
+controls, and NA.
+
+```{r, eval=TRUE}
+setwd('/mnt/research/StatGen/ukb') # project directory
+setwd('dat/phe')                   # working directory - phenotypes
+options(stringsAsFactors=FALSE)    # save a lot of pain
+
+## foreign id in CAD data, aligned to local UKB id
+eid.cad <- scan('cad/eid.txt', "", skip=1, na.strings = "", blank.lines.skip = FALSE)
+eid.loc <- scan('eid.txt', "", , skip=1, na.strings = "", blank.lines.skip = FALSE)
+eid <- data.frame(eid.cad=eid.cad, eid.loc=eid.loc)
+
+## CAD positives
+load("cad/CAD_processed.RDat")
+pos <- data.frame(eid=cad.inf$V1, pos=1) # diagnosed positives
+sus <- data.frame(eid=neg.id, sus=1)     # suspected positives
+
+## merge
+cad <- Reduce(function(x, y) merge(x, y, 1, all.x=TRUE), list(eid, pos, sus))
+
+## sort by local UKB id
+cad <- cad[sort.list(cad$eid.loc), ]
+stopifnot(all(eid.loc == cad$eid.loc))
+stopifnot(all(eid.cad == cad$eid.cad, na.rm=TRUE))
+
+## set case and missing
+cad <- within(cad,
+{
+    sus[is.na(sus)] <- 0 # mark non-suspects
+    pos[is.na(pos)] <- 0 # mark cases
+    ## marking missing: 1) id unmatched; 2) possible false negatives
+    pos[is.na(eid.cad) | pos == 0 & sus != 0] <- NA
+})
+
+## randomly preview 50 lines
+cad[sort(sample.int(nrow(cad), 50)), ]
+
+## check available cases
+cat("cases:", round(mean(cad$pos, na.rm=TRUE) * 100, 2), "%\n")
+## check missing
+colSums(is.na(cad))
+
+## save CAD case, in the order of local UKB eid
+write.table(cad[, "pos", drop=FALSE], "cad/pos.txt", quote=FALSE, na="", row.names=FALSE)
+```
+
+The phenotype file should appear as __{p}/dat/phe/cad/pos.txt__. To
+ease any future use, create link __{p}/dat/phe/cad.txt__ pointing to
+**pos.txt**, which will act as the main data of coronary heart
+disease.
+
+```{sh, eva=TRUE}
+p=$GRP/ukb; cd $p               # project directory - UKB related
+w=dat/phe;  cd $w               # working directory - phenotypes
+ln -sf cad/pos.txt cad.txt      # shortcut link to cad/pos.txt
+
+# number of non-missing
+tail -n+2 cad.txt | grep [01] | wc -l
+
+# number of cases
+tail -n+2 cad.txt | grep 1 | wc -l
+```
+
+# Published Weights
+
+Find SNP weights [here][wg1], published by [here][pp1]. Save the file
+to __{p}/dat/gwa/wgt__ along with locally calculated weights.
+
+[pp1]:https://www.nature.com/articles/s41588-018-0183-z
+[wg]:http://www.broadcvdi.org/informational/data
+
+```{sh, eval=FALSe}
+cd $GRP/ukb/dat/gwa/wgt         # workding dir: SNP weights
+url=https://personal.broadinstitute.org/mvon/CoronaryArteryDisease_PRS_LDpred_rho0.001_v3.zip
+wget $url -O tmp.zip
+unzip tmp.zip
+mv CoronaryArteryDisease_PRS_LDpred_rho0.001_v3.txt cad.pub_p1e-3.txt
+rm tmp*
+```
+
+# Validation
+
+Regress CAD on known risk factors and genome-wide polygenic risk score
+(GPS). If the ID matching is correct, at least the risk factors should
+be significant. If the GPS is correctly done, it should be significant
+as well, and preferably improve the AUC slightly.
+
+Make sure the GPS has been calculated, see __ldp.Rmd__ or __ldp.html__
+for details. For CAD, the output was __{p}/dat/phe/cad/gps.txt__.
+
+```{R, eval=FALSE}
+setwd('/mnt/research/StatGen/ukb/dat/phe/')
+options(stringsAsFactors=FALSE) # avoid factor trouble
+library(pROC)                   # for AUC
+scn <- function(., w) scan(., w, sep='\t', skip=1, quiet=TRUE, blank.lines.skip=FALSE)
+eid <- scn("eid.txt", "") # sample ID: eid
+cad <- scn("cad.txt", 0L) # phenotype: CAD
+age <- scn("age.txt", 0L) # covariate
+sex <- scn("sex.txt", 0L) # covariate
+
+## genome-wide polygenic score (all)
+hdr <- scan("cad/gps/imp.txt", "", nlines=1) # headers
+gps <- scn("cad/gps/imp.txt", .0)            # columns
+gps <- matrix(gps, length(eid), length(hdr), TRUE)
+
+## function to summerize a linear model
+s <- function(m) 
+{
+    e <- summary(m)$coef                      # coef
+    rownames(e)[1] <- "int"                   #
+
+    a <- auc(model.frame(m)[, 1], predict(m, type="response")) # AUC
+    a <- rbind(auc=c(a, rep(NA, 3)))          #
+
+    r <- rbind(e, a)                          # return
+    colnames(r) <- c("est", "se", "tvl", "pvl")
+    data.frame(key=rownames(r), r)
+}
+
+## lr <- function(...) glm(...,, family="binomial")
+ret <- lapply(seq(hdr), function(i)
+{
+    ## genome-wide polygenic scores (one)
+    gps <- scale(gps[, i])
+
+    ## permuted response variable
+    pmu <- sample(cad)
+
+    ## models: permuted null, GPS, and permuted GPS
+    rt <- rbind(data.frame(mdl="gps", pmu=0, s(lm(cad~age+sex+gps))),
+                data.frame(mdl="gps", pmu=1, s(lm(pmu~age+sex+gps))))
+    data.frame(tag=hdr[i], rt)
+})
+ret <- do.call(rbind, ret)
+
+## null models, with/without permutation
+pmu <- sample(cad)
+m0 <- data.frame(mdl="nul", pmu=0, s(lm(cad~age+sex)))
+m1 <- data.frame(mdl="nul", pmu=1, s(lm(pmu~age+sex)))
+ret <- rbind(data.frame(tag=NA, rbind(m0, m1)), ret)
+
+rownames(ret) <- NULL
+saveRDS(ret, "cad/imp.ldp.rds")
+```
+When done, the report for __ldpred__'s validation analysis regarding
+CAD should be saved as __{p}/dat/phe/cad/ldp.rds__.
+
+Compare AUC between models with GPS and without (null):
+```{R, eval=TRUE}
+setwd('/mnt/research/StatGen/ukb/dat/phe/')
+ldp <- readRDS("cad/imp.ldp.rds")
+## untempered response
+subset(ldp, key=="auc" & pmu==0, -c(pmu, se, tvl, pvl))
+
+## permuted response
+subset(ldp, key=="auc" & pmu==1, -c(pmu, se, tvl, pvl))
+```
+Look like GPS under the best $\rho=1e-1$ does improve the AUC from
+0.7587 to 0.7749 (by 0.0162), but since the AUC for null model is
+already high, this do not announce much genetic effect.
+
+Comparing the AUC betwen non-permuted and permuted models validate the
+sample ID matching between the local UKB data and Wu's CAD data, since
+non-permuted models predict much better than permuted ones.

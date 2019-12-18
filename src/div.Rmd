@@ -1,0 +1,288 @@
+---
+title: "Divide Samples"
+author: Xiaoran Tong
+output:
+  html_document:
+    toc: TRUE
+---
+
+# Introduction
+
+We used to manually shuffle and divided the genotype of UKB cohort of
+nealy 500K individuals into chunks of 2K - 3K for batched modeling, which
+have worked so far for phenotypes of few to no missing values, such as:
+
+  * Systolic/diastolic blood pressure;
+  * Derived frequency of smoking;
+  * Derived frequency of drining;
+
+Now it is necessary to divide the oversized cohort automatically, when
+target phenotypes have many missing values, which reslut in fewer chunks
+but each chunks will still have adequate samples to stablize the models.
+
+We need a script to accomplish automatic division, given some phenotype
+of arbitrary missing values.
+
+# Interface design
+
+Since the goal is to shuffle and divide a genotype sample-wise while
+excluding missings that appeared in one or more phenotypes, the script
+should accept the following paramters:
+
+  * -gno, -g: input genotype data;
+    - the prefix of PLINK BED file set suffixed by **"bed"**,
+    **"bim"**,and **"fam"**;
+  * -iid, -i: retain a certain set of individuals
+    - text file(s) of a single column of individual id
+  * --out, -o: the directory to put divided genotype
+  * --bsz, -b: expected batch size; the exact size may differ due to
+  round off.
+  * support wildcards
+    - accept <gno> and <iid> in forms such as **{1..22}**,
+    __smk/*.eid__;
+
+
+# Scripting language
+  
+## Python  
+  Python is semi-platform independent, and its bioinformatics
+  communities has developed tools for PLINK files.
+  
+  However, it so far does not work in my case either because the
+  tool does not support writing PLINK BED, or it does not preserve
+  allele-order (always re-assign major and minor allele)
+  
+  The update of allele order is especially a headache when some SNPs
+  lost its polymophism in some batches.
+
+## Shell + Plink
+  A second choice is a bash script coupled with PLINK's own data
+  management functions.
+
+  This will only work under a Linux environment.
+  
+  Another downside is that PLINK will go through the genotype file
+  again each time a new batch is to be extracted.
+  
+  However, one can benefit from PLINK's --keep-allele-order option
+  that preserve allele information.
+
+
+# Test Case
+
+We have set up a test environment for this scripting job, where
+the working directory will be **{p}** -- the project root.
+
+## whole genotype
+
+The genotype have been throught quality control, and kinships
+have been broken by removing of some individuals.
+
+The working data has roughly 380K high-quality samples of 470K
+well-called bi-allelic SNPs, arragned into 26 chromosomes under
+**{p}/dat/cal/002**.
+
+```{sh, eval=TRUE}
+p=$GRP/ukb; wc -l $p/dat/cal/002/01.fam
+```
+Rest of the samples who are likely related (N=79,677) were put
+under **{p}/dat/cal/008**, which may also be divided.
+```{sh, eval=TRUE}
+p=$GRP/ukb; wc -l $p/dat/cal/008/01.fam
+```
+
+For now we ignore the SNPs on chromosome 24 - 26 (Y, MT, and
+XY).
+
+## test genotype
+
+We now extract a tiny subset of 50 SNPs from each chromsome of
+cleaned genotype under **{p}/dat/cal/002**, but keep all 380K
+eligible individuals.
+
+The extracted data will be put under **{p}/dat/cal/tst**. Here
+is the script:
+
+```{sh, eval=FALSE}
+p=$GRP/ukb
+w=$p/dat/cal; cd $w
+s=$p/dat/cal/002
+d=$p/dat/cal/div; mkdir -p $d
+for i in {01..22}
+do
+    head -n 50 $s/$i.bim > $d/$i.bim
+    plink --bfile $s/$i --extract $d/$i.bim --make-bed --out $d/$i
+done
+```
+
+## phenotype
+
+Some phenotypes of 500K individuals have been extracted from
+the raw data package, and orgnized as two files per phenotype:
+
+ * name.txt: phenotype values with missing coded as "".
+ * name.eid: list of individuals with non-missing value.
+ 
+The phenotypes are put under **{p}/dat/phe**, shown by the
+following script:
+
+```{sh, eval=TRUE}
+p=$GRP/ukb; wc -l $p/dat/phe/*.txt
+```
+
+When later invoke the batch division script, we will pass the
+"eid" files to its option "iid" in order to limit the partion
+among individuals with non-missing phenotype.
+
+
+# Test Result
+
+## Python Script
+
+It was named **div.py**, together with other scripts and this
+document, saved under **{p}/src/**.
+
+It failed the test due to inconsistency in allele order.
+
+
+## Shell Script + PLINK
+
+It is named as **div.sh** and put under __"{p}/src/"__, together
+with this document and other codes.
+
+The script successfully retained allele information, with the
+help of PLINK's --keep-allele-order option.
+
+It is so far working as expected.
+
+
+# real data division
+
+With the shell script and PLINK binary ready, we shall divide the
+cleaned genotype among individuals with non-missing value for the
+phenotype of our interests.
+
+Since the batched genotype is still large, it is adviserable to output
+into scratch space which, though purges the data every 44 days but is
+considerablly large.
+
+The output will be organized as __{s}/dat/b?k/{y}__, where __{s}__ is
+the the root of UKB related data in scratch space, __{y}__ is the name
+of a phenotype since the division should be applied to non-missing
+entries of a phenotype, and __b?k__ denotes batch size in the
+thousands.
+
+In case of phenotypes with no missing values (i.e., illnesses),
+__{y}__ is set to the __eid___ and still treated as a "phenotype" in
+the up coming scripts.
+
+
+
+## genotype
+
+The cleaned genotype for called SNP in PLINK format has been saved
+under:
+
+  * __{p}/dat/cal/002__,
+
+and named 01 ... 26 as chromosomes. See __{p}/src/wgs.Rmd__
+for more details about genotype QC.
+
+
+## phenotype
+
+```{sh, eval=TRUE}
+o=$SCR/ukb/dat
+mkdir -p $o/bat # b{1..3}k
+p=$GRP/ukb; cd $p
+for b in $o/b?k; do ln -sf $b dat; done
+ls -lh dat/b?k
+```
+
+The list of phenotype code (i.e., value of __{y}__) is list here:
+
+* cnb: cannabis frequency
+* smk: smoking frequency
+* alc: alcohol drinking
+* sbp: systolic blood pressure
+* dbp: diastolic blood pressure
+* eid: individual IDs - dummy phenotype without a single missing.
+
+According to our convention, phenotype __{y}__ is located at:
+__{p}/dat/phe/{y}.txt__, while the corresponding ID of non-missing
+entries is __{p}/dat/phe/{y}.eid__.
+
+
+## division
+
+With cleaned genotype, phenotype, and non-missing entry ID list
+ready, we can divide the genotype into batches of various sizes
+using script __{p}/src/div.sh__.
+
+```{sh, eval=FALSE}
+p=$GRP/ukb; cd $p
+s=$SCR/ukb                      # scratch for UKB
+o=$s/dat/bat                    # output
+
+# create and link from within project
+mkdir -p  $o
+ln    -sf $o dat/
+
+# copy post QC genotype into scratch, avoid NFS issue
+q=$s/dat/gqc; mkdir -p $q
+cp dat/cal/003/{01..22}.{bed,bim,fam} $q/
+
+
+cfg=( {cnb,smk,alc,sbp,dbp,bpl,fis,mtm,nrt,pmr,eid,men,wmn}_b00 )
+g=gqc/{{01..22}}
+for c in ${cfg[@]}; do
+    y=${c/_*/}                               # phenotype
+    b=${c/*_/}                               # batch size (in K)
+    d=$o/${y}_${b}                           # destination
+    i=dat/phe/${y}.eid                       # non-missing IID
+
+    # batch size (auto)
+    b=$(cat $i| wc -l | awk '{printf "%d\n", $1^(2/3)}')
+    echo $y $i $b $d
+    # HPCC script
+    hpcwp "sh div.sh -i $y.eid -b $b --retain -v $g" \
+          -q1 -t12 -m8 -d $d --ln $q --cp src/div.sh --cp $i
+done
+
+for c in ${cfg[@]}; do
+    y=${c/_*/}                    # batch size (in K)
+    b=${c/*_/}                    # phenotype 
+    $o/${y}_b${b}k/sub.sh
+done
+```
+
+The non-missing value entries will be fed to division script's "-i"
+or "--iid" option, as a filter of individuals. As mentioned before, for
+phenotypes of no missing value, we pass the speciall __eid.eid__ to
+"-i/--iid" option.
+
+When all the batch divisions are down, a number of directories should
+appear under __{p}/dat/__:
+
+```{sh, eval=FALSE}
+p=$GRP/ukb; cd $p
+ls -lh dat/b?k/
+```
+
+# Result
+
+As mentioned in __{p}/src/phe.Rmd__ and __{p}/src/div.Rmd__, most
+phenotype has far fewer non-missing entries then the entire sample
+size, thus it is necessary to divide genotype for each phenotype.
+
+The batched genotype has been organized as:
+
+* __{s}/dat/{b}/{y}__, or
+* __{p}/dat/{b}/{y}__,
+
+where the former is located within the scratch space __{s}__ for UKB
+data, while the later is a convenient link to it from within the
+project directory __{p}__; in addition, {b} denotes batch size, which
+can be __b2k__, __b3k__, and so on; {y} is the short name of phenotype
+of interest, such as __alc__ for alcohole drinking, smk for smoking
+frequency, and eid for the dummy no-missing phenotype, etc.

@@ -1,0 +1,509 @@
+---
+title: "UK Biobank LDpred for CAD"
+author: "xiaoran"
+output: "html_document"
+---
+
+Using [LDPRED][ldp] to calculate genome-wide polygenic score (GPS) for
+genotyped sample on a phenotype based on existing GWAS report.
+
+In this particular example, we use a vetted Coronary Artery Disease
+(CAD) diagnosis on participants of United Kingdom Bio-Bank (UKB).
+
+CAD phenotype was originally provided by UKB, the vetted version was
+provided by Dr. Wu.
+
+The work is meant to be done on a server, assuming the researcher has
+limited access of the operating system. The scripts in this document
+runs on Michigan State University High performance computation center
+([MSU HPCC][hpc])
+
+ldp:https://github.com/bvilhjal/ldpred
+hpc:https://wiki.hpcc.msu.edu/
+
+
+# Preperation
+
+## Install LDPred
+
+According to [instruction][ldp], it is easy to install dependencies
+like "plinkio" with "pip". To install ldpred itself, the github option
+worked better on the server.
+
+First, clone the package and build it, then install it in the
+researcher's user directory. Here is the script:
+```{sh, eval=FALSE}
+mkdir ~/pkg						# download packages here
+cd ~/pkg                        # clone
+git clone https://github.com/bvilhjal/ldpred.git
+
+cd ldpred
+py setup.py build               # build & set up
+py setup.py install --prefix=$HOME/.local
+```
+
+Here __\$HOME__ is a usual unix environment variable pointing to the
+home directory of the current user.
+
+When this is done without error, "ldpred" should appear on HPCC's
+search path, invoking the command should print help, and running its
+test should yield an "OK" in the end:
+```{sh, eval=TRUE}
+ldpred
+# ldpred-unittest # uncomment this for test
+```
+
+## Phenotypes
+
+Make sure UKB data were downloaded and parsed. In our case, they are
+stored under **{p}/dat/phe** in text file _*.txt_, usually one file
+per phenotype aligned with sample ID in **{p}/dat/phe/eid.txt**. CAD
+is in __{p}/phe/cad.txt__. See__cad.Rmd__ and __cad.html__ for details
+of ID alignment.
+
+Notation: {p} denotes the root of UKB related project.
+
+## Target Genotype
+
+Post QC GWAS calls are under __{p}/dat/cal__, prefixed by __002__. See
+**dwn.Rmd** and **cal.Rmd** for details. Use GWAS calls to run 
+
+Imputed WGS after QC is under __{p}/dat/imp__ with prefix **003**. See
+**dwn.Rmd** and **imp.Rmd** for more details.
+```{sh}
+p=$GRP/ukb; cd $p               # project directory
+ls dat/cal/002.*                # GWAS calls passed QC
+ls dat/imp/003.*                # Imputed WGS after QC
+```
+The genotypes use in PLINK format.
+
+
+## LD reference panel
+
+LDPRED require an independent genotype to characterize the LD pattern,
+here we use 503 Europeans in 1000 genome project (KGP).
+
+Make sure both the KGP genotype and discription (i.e., nationality and
+ancestory of the sample) were downloaded, processed, and have all
+individuals of European origin extrated.
+
+In our case, 503 Europeans are saved as **{G}/kgp/eur/000**. For
+details of processing and extracting of European samples, see
+**{G}/kgp/src/eur.Rmd**. Here we only inspect prepared genotype.
+
+Notation: {G} denote research group directory allocated by HPCC MSU,
+and __kgp__ is for works related to 1000 Genome.
+```{sh, eval=TRUE}
+cd $GRP/kgp						# directory for 1000G based works
+ls -lh eur/000.{bed,bim,fam}	# European samples
+wc -l eur/000.fam               # should be 503
+```
+
+File set __eur/000__ is the entire genome except chromosome Y. Looking
+up positions of a few variants verifies that it is aligned with human
+reference genome build v37 (CRCh37/hg19).
+
+
+## GWAS summary
+
+For CAD, follow the practice in [here][pb1], which refers to another
+[study][bp2] providing summary statistics.
+
+  * On [GWAS catlog](https://www.ebi.ac.uk/gwas/home), search
+  "coronary artery disease"; 
+  * in the results, find the title "A comprehensive 1,000 ...", which
+  lead to publication
+  [26343387](https://www.ebi.ac.uk/gwas/publications/26343387);
+  * in the __study__ section, the number **GCST003116** lead to a
+  [study](https://www.ebi.ac.uk/gwas/studies/GCST003116);
+  * seek the FPT link "Full Summary" in the study page, which leads to
+  [this](ftp://ftp.ebi.ac.uk/pub/databases/gwas/summary_statistics/NikpayM_26343387_GCST003116);
+  * under directory __harmonised__, download original summary named
+  [26343387-GCST003116-EFO_0000378-build37.f.tsv.gz](ftp://ftp.ebi.ac.uk/pub/databases/gwas/summary_statistics/NikpayM_26343387_GCST003116/harmonised/26343387-GCST003116-EFO_0000378-build37.f.tsv.gz)
+
+pb1:https://www.nature.com/articles/s41588-018-0183-z
+pb2:https://www.nature.com/articles/ng.3396
+
+Save GWAS summary statistics to __{p}/dat/gwa/sms/__.
+
+According to the readme, **26343387-GCST003116-EFO_0000378.h.tsv.gz**
+-- the haronised version, created via automatic allele flipping, have
+more SNP aligned with the latest GRCh38, but since the LD reference is
+aligned to build 37, the orignal report is a better choice.
+
+Nonetheless, download the harmonised version for future use.
+
+According to "_A comprehensive 1,000 Genomes ..._", roughly 185,000
+CAD cases and controls were analysed, which breaks down to
+
+  * 141,217 European;
+  *   3,139 African American or Afro-Caribbean;
+  *   4,095 Hispanic or Latin American;
+  *  25,557 South Asian;
+  *   2,268 Greater Middle Eastern (Middle Eastern, North African or Persian);
+  *  11,323 East Asian;
+  
+By looking at toy examples came with ldpred, these fields should be
+orderly extracted from a GWAS report:
+
+  * CHR: chromosome
+  * POS: basepair position
+  * SNP_ID: (obvious)
+  * REF: reference allele
+  * ALT: alternative allele
+  * REF_FRQ: allele frequency of reference allele
+  * PVAL: p-value
+  * BETA: estimated beta coeficient of SNP effect
+  * SE: standard error of estimated beta
+  * N: sample size contributed to the estimate
+  
+Exam the headers in GWAS report "__..0000378-build37.f.tsv.gz__":
+```{sh, eval=FALSE}
+cd $GRP/ukb/dat/gwa/sms         # working dir: GWAS reports
+zcat 26343387-GCST003116-EFO_0000378-build37.f.tsv.gz |
+    head -n 1 | tr '\t' '\n' | awk '{print NR"\t"$1}'
+```
+Looks like the columns should be extracted in this order:
+
+  2.  chromosome                 -> CHR
+  3.  base_pair_location         -> POS
+  1.  variant_id                 -> SNP_ID
+  4.  effect_allele              -> REF
+  5.  other_allele               -> ALT
+  6.  effect_allele_frequency    -> REF_FRQ
+  9.  p_value
+  7.  beta
+  8.  standard_error
+  10. N           (dropped later)
+  13. odds_ratio  (dropped later)
+
+**Note:** letting *effect_allele* be *REF* (reference allele), and
+*other_allele is* be *ALT* (alternative allele) is only tentative,
+which might switch after further examination.
+
+Preview the first few lines of the aformentioned columns:
+```{sh, eval=TRUE}
+cd $GRP/ukb/dat/gwa/sms         # working dir: GWAS reports
+zcat 26343387-GCST003116-EFO_0000378-build37.f.tsv.gz |
+    awk '{print $2,$3,$1,$5,$4,$6,$9,$7,$8,$10,$13}' | head
+```
+It seems column "10. N" is not a sample size, and "13. odds_ratio" is
+invalid, so drop these 2 columns.
+
+Most of the time, effect\_allele (4th) have higher frequency reported
+(6th) than other\_allele (4th), therefore it is sensible to maintain
+the assumption that effect\_allele is REF, and other\_allele is ALT.
+
+Now exam the allele in the 4th and 5th column of the GWAS report.
+```{sh, eval=TRUE}
+cd $GRP/ukb/dat/gwa/sms         # working dir: GWAS reports
+zcat 26343387-GCST003116-EFO_0000378-build37.f.tsv.gz | tail -n+2 | \
+    tail -n+2 | cut -f4,5 | sort | uniq -c
+```
+By common practices (see _Methods_ in [this paper][pp1]), remove
+variants with A/T or C/G alleles to avoid ambiguous strands, with
+tolerable impact since A/T and G/C are among the minorities.
+
+An abnomality is the 27 lines of "effect_allele, other_allele". It
+seems the report was compiled from chromosomes, but they forgot to
+remove the headers expect for the first chromosome.
+
+There also some deletion/insertion alleles mared by __D/I__, which
+may cause variant of duplicated position and should be removed.
+
+[pp1]:https://www.nature.com/articles/s41588-018-0183-z
+
+Now do the following:
+  
+  * take out useful columns from the entire report; 
+  * remove variants with A/T or C/G alleles;
+  * remove headers misplaced in middle of the report;
+  * remove deletion/insertion alleles.
+  * make sure the output is tab-delimited and acceptable by ldpred;
+  * as for sample size __N__, use the reported number **187,599**.
+
+```{sh, eval=FALSE}
+cd $GRP/ukb/dat/gwa/sms         # working dir: GWAS reports
+o=cad.b37
+# header, according to ldpred's example
+echo -e "CHR\tPOS\tSNP_ID\tREF\tALT\tREF_FRQ\tPVAL\tBETA\tSE\tN"       > $o
+# extracted columns
+zcat 26343387-GCST003116-EFO_0000378-build37.f.tsv.gz |
+    grep -E -v "(A\sT|T\sA|C\sG|G\sC|D\sI|I\sD)" |
+    awk -v OFS=$'\t' 'NR>1 {print $2,$3,$1,$4,$5,$6,$9,$7,$8,187599}' >> $o
+```
+When done, **"cad.b37"** should appear under **{p}/dat/gwa/sms**.
+
+
+# Use ldpred
+
+The workflow break down to 3 steps:
+
+  1. **ldpred coord**: parse GWAS summary, and use a reference panel
+  to build LD coordinates.
+
+  2. **ldpred gibbs**: re-weight SNP for polygenic scoring.
+
+  3. **ldpred score**: calculate GPS with (2) and target genotype.
+
+A brief review:
+
+  * LD-reference are 503 Europeans of KGP p3v5 at kgp/eur/000;
+  * target genotype are
+    - GWAS call __{p}/cal/002__;
+    - imputed __{p}/ukb/imp/003__.
+  * CAD and other phenotypes are under __{p}/phe/__
+
+
+## Step 1
+
+Use **ldpred coord** to calculate LD map, which requires GWAS summary
+and reference genotype:
+```{sh, eval=FALSE}
+p=$GRP/ukb; cd $p               # project directory
+w=$p/dat; cd $w                 # working directory
+r=$GRP/kgp/eur/000              # LD reference genome
+s=gwa/sms                       # GWAS summary
+d=gwa/crd; mkdir -p $d          # output: LD map
+cal=cal/002                     # target GT: GWAS calls
+imp=imp/003                     # target GT: imputed
+
+cmd="ldpred coord --gf $r --ssf $s/cad.b37 --N 187599 --ssf-format LDPRED"
+echo $cmd "--out cad.cal --vbim $cal.bim" >  tmp.cmd # GWAS call
+echo $cmd "--out cad.imp --vbim $imp.bim" >> tmp.cmd # imputed
+echo $cmd "--out cad.gwa"                 >> tmp.cmd # reported
+cat tmp.sh
+hpcwp tmp.cmd -d $d -t12 -q1 -p4 -m96 --maf 0.005 --ln gwa,cal,imp
+rm tmp.cmd
+```
+
+Explanation:
+    
+  * --gf  : genotype file in 000.{bed,fam,bim};
+  * --ssf : GWAS summary statistics;
+  * --vbim : list of SNPs in the target genotype, in PLINK BIM format;
+  filtering the set of SNPs in the product LD map down to this set is
+  recommended by LDPRED!
+    - cal: GWAS calls (small number);
+    - imp: imputed (large number);
+    - gwa: variant in GWAS summary (even larger number).
+  * --N : number of unrelated individuals in the GWAS summary;
+  * --ssf-format : format of the GWAS summary;
+  * --out : where to write output coordinate.
+  
+Because any of the 3 settings (GWAS wide, imputed, or reported) take
+hours to finish, create HPCC jobs with __hpcwp__ to avoid job kill.
+When done, 3 coordinate file **cad.cal**, **cad.imp** and **cad.gwa**
+should appear under __{p}/dat/gwa/crd__, with coordiates of called,
+imputated, and all reported variants, the prefix **cad** stands for
+"Coronary Artery Disease".
+
+More about --vbim: it was not included in the first try, but __ldpred
+score__ complained that only a small fraction of SNPs in the target
+genotype __cal/002__ is covered by SNP in the coordinate created by
+__ldpred coord__, and recommended a rerun with --vbim.
+
+```{sh, eval=TRUE}
+p=$GRP/ukb; cd $p               # project directory
+ls dat/gwa/crd					# exam result
+# cat dat/gwa/crd/log/*			# show log
+```
+
+
+## Step 2
+
+Use **ldpred gibbs** to re-weight SNP for polygenic scoring.
+
+```{sh, eval=FALSE}
+p=$GRP/ukb; cd $p               # project directory
+w=dat/gwa;  cd $w               # working directory
+s=crd                           # LD coordinates from step 1
+d=wgt; mkdir -p $d              # SNP weights
+y=cad                           # phenotype
+
+for n in $y.{cal,imp,gwa}; do
+    # c="ldpred gibbs --cf $s/$n --ldr 20 --ldf $n --N 187599 --out $n"
+    c="ldpred gibbs --cf $s/$n --ldr 20 --ldf $n --out $n"
+    for f in {1e+00,1e-01,1e-02,1e-03,3e-01,3e-02,3e-03}; do
+        echo $c --f $f
+    done
+done | tee tmp.cmd
+hpcwp tmp.cmd -d $d -t12 -q1 -p4 -m32 --ln $s; rm tmp*
+```
+
+Explanation for __ldpred gibbs__:
+
+  * --cf  : the coordinate file from previous step;
+  * --ldr : LD calculation radius in number of SNPs;
+  * --ldf : prefix of LD files, helps to avoid repetative calc.
+  * --N   : assumed sample size of GWAS summary;
+  * --out : prefix for output
+
+The procedure may use more than 2 hours, therefore, use __hpcwp__ to
+compile and submit, avoid job termination.
+
+When done, **{o}_LDpred_p{x}.txt** appear under __{p}/dat/gwa/wgt__,
+where {x} stands for assumed proportion of casual variants $\rho$, a
+hyper-paramter to be grid-searched.
+
+Another file, {o}_ldradius{r}.pkl.gz also appear, which is a cached LD
+map based on option **--ldr=20**, so new proportion __{x}__ will not
+run for another 2 hours, but when **ldr** changes, step 2 has to be
+rerun throughly.
+
+```{sh, eval=TRUE}
+p=$GRP/ukb; cd $p               # project directory
+ls -1 dat/gwa/wgt/cad*          # check output
+```
+
+## Step 3
+
+Compute genetic score (GSC) and prediction by **ldpred score** for
+each person. 
+
+Asseble the phenotype file in FAM format, take *.fam from the genotype
+and fill the 6th column with phenotype under **dat/phe**, also code
+missing values to -9, and 1=control, 2=case for case/control outcomes.
+
+## GWAS calls
+```{sh, eval=FALSE}
+cd $GRP/ukb/dat                 # working directory
+r=gwa/wgt                       # SNP weights from Step 2
+y=cad                           # phenotype
+g=cal/002                       # GWAS calls, post QC
+w=$y.cal                        # prefix of weights: called variants
+# d=gwa/gps/${w/.//}; mkdir -p $d   # GPS for CAD, based GWAS calls
+d=gwa/rpt/$y/cal                # GPS for CAD, based GWAS calls
+
+for s in $r/${w}_LDpred_p[1-9]*; do
+    o=${s##*_p}
+    o=${o%.*}
+    echo "plink2 --bfile $g --score $s 3 4 7 header-read center --out $o --threads 4"
+done | tee tmp.cmd
+hpcwp tmp.cmd -d$d -t2 -q1 -p4 -m32 --ln cal,gwa; rm -rf tmp*
+```
+GPS take some time, for each $\rho$, submit a job to HPCC's SLURM
+sytem to avoid termination.
+
+
+## Imputed Genotype
+
+Get GPS for imputed genotype __{p}/dat/imp/003__, use PLINK2 instead,
+as this [paper][pb1] used PLINK2 to calculated GPS:
+
+* Scores were generated by multiplying the genotype dosage of each
+risk allele for each variant by its respective weight, and then
+summing across all variants in the score using PLINK2. *
+
+```{sh, eval=FALSE}
+cd $GRP/ukb/dat;                # working directory
+r=gwa/wgt                       # SNP weights from Step 2
+y=cad                           # phenotype: CAD
+g=imp/003                       # imputed genotype, post QC
+d=gwa/gps/$y/imp; mkdir -p $d   # GPS directory
+w=$y.imp                        # prefix of SNP weights: imputed
+
+for s in $r/$y.gwa_LDpred_p[1-9]*; do
+	for c in $g/*.pgen; do		# chromosomes
+		c=${c%%.*}
+		i=${c##*/}
+		o=${s##*_p}
+		o=${o%.*}
+		o=p${o/[.]0000}.c$i     # rho
+		echo "plink2 --pfile $c --score $s 3 4 7 header-read --out $o --threads 4"
+	done
+done | tee tmp.cmd
+hpcwp tmp.cmd -d$d -t4 -q1 -p4 -m32 --ln imp,gwa; rm -rf tmp*
+```
+
+The result is saved under __{p}/dat/gwa/gsc/cad/imp__, and the file
+name is formated as __p{1}.c{2}.sscore__, where {1} is the value of
+hyper-parameter $\rho$, and {2} is a chromosome.
+
+```{sh, eval=TRUE}
+cd $GRP/ukb/dat/gwa
+ls -1 gps/cad/imp/*.sscore | head -n 5
+echo ... ...
+ls -1 gps/cad/imp/*.sscore | tail -n 5
+```
+
+Get sum of GPS, weighted by allele counts in each chromosome.
+
+```{r, eval=FALSE}
+setwd('/mnt/research/StatGen/ukb/dat/gwa/gps/cad/imp')
+fns <- dir(".", "[.]c.*[.]sscore$") # chromosome polygenic scores
+rho <- sub("[.].*$", "", fns)       # fraction of casual variants
+iid <- read.delim(fns[1])[, 2]      # IID
+for(grp in split(fns, rho))
+{
+    out <- paste0(sub("[.].*$", "", grp[1]), ".gps") 
+    cps <- lapply(grp, function(f)
+    {
+        print(f)
+        with(read.delim(f), NMISS_ALLELE_CT * ldpred_beta_AVG)
+    })
+    gps <- data.frame(iid, Reduce(`+`, cps)) # GPS for one rho
+    print(out)
+    write.table(gps, out, quote=FALSE, sep='\t', row.names=FALSE, col.names=FALSE)
+}
+```
+
+# Parse GPS
+
+Turn the GPS into a covariate aligned with the cohort by sample ID.
+
+## GWAS variants
+```{sh, eval=FALSE}
+p=$GRP/ukb; cd $p               # project directory
+w=dat;      cd $w               # working directory
+y=cad                           # phenotype name
+s=gwa/gsc/$y                    # genetic scores
+d=phe/$y                        # phenotype dir
+
+for f in $s.*_LDpred*.txt; do   # GPS for all rho (fraction of casual variants)
+    r=${f##*_p}                 # rho
+    r=${r%.*}
+    t=${f/$s./}                 # tag (i.e., cal, imp, and gwa)
+    t=${t%_LD*}
+    echo $f $t $r
+    o=${f%.*}.srt               # sorted by ID
+    echo ${t}${r} > $o
+    join <(tail -n+2 phe/eid.txt) <(tail -n+2 $f | tr -d , | sort -k1,1) -a1 -o2.2 >> $o
+done
+paste $s*.srt > $d/gps.cal.txt
+```
+
+Inspect the GPS:
+```{sh, eval=TRUE}
+p=$GRP/ukb; cd $p               # project directory
+w=dat;      cd $w               # working directory
+y=cad                           # phenotype name
+d=phe/$y/gps.cal.txt            # GPS file
+head $d | column -t
+```
+
+## Imputed variants
+```{sh, eval=FALSE}
+p=$GRP/ukb; cd $p               # project directory
+w=dat;      cd $w               # working directory
+y=cad                           # phenotype name
+s=gwa/gps/$y/imp                # genetic scores
+d=phe/$y/gps                    # phenotype dir
+mkdir -p $d
+for f in $s/*.gps; do           # GPS for all rho
+    r=${f##*/p}; r=${r%.*}      # rho
+    t=${f%%/p*}; t=${t##*/}     # tag (i.e., cal, imp, and gwa)
+    o=tmp.$t.$r.gps
+    echo $o
+    echo rho=${r} >$o 
+    join <(tail -n+2 phe/eid.txt) <(sort $f -k1,1) -a1 -o2.2 >> $o
+done
+paste tmp.*.gps > $d/imp.txt; rm -rf tmp.*.gps
+```
+The GPS are saved to __{p}/dat/phe/cad/gps/imp.txt__, with columns
+corresponding to a range of $\rho$ (fraction of casual variants).
+
+```{sh, eval=TRUE}
+cd $GRP/ukb/dat/phe/cad/gps     # working dir: GPS for CAD
+head imp.txt | column -t
+```

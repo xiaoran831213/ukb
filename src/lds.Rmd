@@ -1,0 +1,70 @@
+---
+title: "UK Biobank LDSC for CAD"
+author: "xiaoran"
+output: "html_document"
+---
+
+Using [LDSC][lds] to calculate LD score, then estimate heritability
+$h^2$ for a phenotype based on existing GWAS summary.
+
+This particular example uses Coronary Artery Disease (CAD) diagnosis
+of UK Bio-Bank (UKB), vetted by [Dr. Wu][Wu].
+
+The work is meant to be done on a server, assuming the researcher has
+limited access of the operating system. The scripts in this document
+runs on Michigan State University High performance computation center
+([MSU HPCC][hpc])
+
+Wu:https://www.linkedin.com/in/wuchong/
+lds:https://github.com/bulik/ldsc
+hpc:https://wiki.hpcc.msu.edu/
+conda:https://docs.conda.io/projects/conda/en/latest/user-guide/overview.html
+
+# Preperation
+
+## Install LDSC
+
+The instructions [here][lds] requires [conda] to work around LDSC's
+dependence on Python2.
+
+With or without [conda], clone a copy of ldsc into the workspace and
+inspect the dependencies:
+```{sh, eval=FALSE}
+# retrieve ldsc
+mkdir -p ~/pkg; cd ~/pkg        # download raw packages here
+[ -e ldsc ] || git clone https://github.com/bulik/ldsc.git
+cd ldsc
+# inspect dependencies
+cat environment.yml
+```
+  * unload Python3, load Python2
+  * uninstall site packages that are in LDSC list of dependencies:
+    - numpy, nose, bitarray
+    - e.g., _pip uninstall numpy
+
+Under researcher's home directory:
+```{sh, eval=FALSE}
+pip install virtualenv --user   # install virtual env tools
+
+# retrieve ldsc
+mkdir -p pkg; cd pkg            # download packages here
+git clone https://github.com/bvilhjal/ldpred.git
+cd ldsc
+
+# inspect dependencies
+cat environment.yml
+
+# create virtual environment
+virtualenv -p python2.7 ~/.ldsc
+
+conda env create --file environment.yml
+conda active ldsc
+
+```
+
+LDSC
+is coded by python2, unintall site package __numpy__ and __panda__
+before run
+
+wget https://data.broadinstitute.org/alkesgroup/LDSCORE/eur_w_ld_chr.tar.bz2
+tar -jxvf eur_w_ld_chr.tar.bz2

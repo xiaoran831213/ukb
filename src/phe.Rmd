@@ -1,0 +1,1474 @@
+---
+title: "UK Biobank Phenotype"
+author: "xiaoran"
+output: "html_document"
+---
+
+# Preparation
+
+Make sure the phenotype main data file has been download from UKB,
+decrypted, converted to texture format under __{s}/ukb/dwn__, where
+{s} denotes scratch space. See __"dwn.Rmd"__ for more details.
+
+In our particular case, the texture phenotype data was saved as
+__"enc_ukb.out.txt"__ under __{s}/ukb/dwn__.
+
+__!__ cautious: if we decide to use MSU's genotype instead of
+downloading it, we have to at least download the __*.fam*__ from the
+current release assigned to us, only then the __IID__ of the genotype
+is able to match the __eid__ of the phenotype.
+
+Make sure the the code book __"enc_ukb.out.html"__ is also extracted
+from the decrypted data, which is helpful for looking up variables.
+
+Starting from the texture data __"enc_ukb.out.txt"__, we first
+
+ 1. carve out individual ID -- the first column __"eid"__;
+ 2. compress the remaining columns to conserve space.
+ 
+Both parts will be saved under project directory __{p}/dat/phe__ for
+long term use.
+
+List of useful environment variables and documents:
+
+  * $GRP: group directory, readable other members of __StatGen__;
+  * $SCR: scratch space only accessible by __tongxia1__;
+  * {p}/doc/phe.html: dictionary of (purchased) UKB phenotype.
+
+```{sh, eval=FALSE}
+p=$GRP/ukb            # project directory
+s=$SCR/ukb/dwn        # downloads
+d=$GRP/ukb/dat/phe    # distination
+mkdir -p $d
+
+sed <$s/enc_ukb.out.txt 's/^\t//' | cut -f1         > $d/eid.col
+sed <$s/enc_ukb.out.txt 's/^\t//' | cut -f2- | gzip > $d/001.txt.gz
+```
+without the 1st column __"eid"__, the indices of the remaining
+columns in __"001.txt.gz"__ are now aligned exactly with the
+column numbers listed in the codebook __"enc_ukb.out.html"__.
+
+The following sections will go through the extraction and
+preprocessing of phenotypes.
+
+# Visits
+
+## Date of Visits
+
+  * Date of attending assessment centre
+    - COL=10, UID=53-0.0, N=502,591
+    - COL=11, UID=53-1.0, N= 20,346
+    - COL=12, UID=53-2.0, N= 23,645
+  
+```{sh, eval=FALSE}
+w=$GRP/ukb/dat/phe; cd $w
+mkdir dov
+zcat 001.txt.gz | cut -f10   > dov/v00.txt
+zcat 001.txt.gz | cut -f11   > dov/v01.txt
+zcat 001.txt.gz | cut -f12   > dov/v02.txt
+for f in dov/*; do
+    o=${f%.*}.eid
+    paste eid.col $f | awk 'NR>1 && $2!="" {print $1}' > $o
+done
+```
+
+# Demographics
+
+These variables are frequently included in almost all analysis:
+
+  * Sex
+    - COL=1, UID=31-0.0, N=502591
+    - Categorical Single
+    - 0=Female, 1=Male
+  * Ethnic Group
+    - COL=3090, UID=21000-0.0, N=501692
+    - Catigorical Single
+  * 1 = white, 1001 = British, 1002 = Irish, 1003 = any other
+    white background;
+  * 2 = Mixed
+    - 2001 = White and Black Caribbean
+    - 2002 = White and Black African
+    - 2003 = White and Asian
+    - 2004 = Any other mixed background
+  * 3 = Asian or Asian British
+    - 3001 = Indian
+    - 3002 = Pakistani
+    - 3003 = Bangladeshi
+    - 3004 = Any other Asian background
+  * 4 = Black or Black British
+    - 4001 = Caribbean
+    - 4002 = African
+    - 4003 = Any other Black background
+  * 5 = Chinese
+  * 6 = Other ethnic group
+  * -1 = Do not know, -3 = Prefer not to answer
+  * Age
+    - COL=3093, UID=21003-0.0, N=502591
+    - Integer
+  * Income
+    - COL=207, UID=738-0.0, N=496572
+    - Categorical Single
+      * 1=Less than 18,000
+      * 2=18,000 to 30,999
+      * 3=31,000 to 51,999
+      * 4=52,000 to 100,000
+      * 5=Greater than 100,000
+      * -1=Do not know, -3=Prefer not to answer
+
+__the extraction script:__
+
+```{sh, eval=FALSE}
+w=$GRP/ukb/dat/phe; cd $w
+mkdir -p dmg
+zcat 001.txt.gz | cut -f1      > dmg/sex.txt
+zcat 001.txt.gz | cut -f3093   > dmg/age.txt
+zcat 001.txt.gz | cut -f3090   > dmg/eth.txt
+zcat 001.txt.gz | cut -f207    > dmg/inc.txt
+```
+
+Based on variable __21000:Ethnic Group__, derive a mask of European
+ancestory that highlights individuals who are __1=white__, or
+__1001=British__, or __1002=Irish__, or __1003=any other white
+background__.
+
+```{sh, eval=FALSE}
+w=$GRP/ukb/dat/phe; cd $w
+awk <dmg/eth.txt '{
+if(NR==1) {print "eur"} \
+else if($1<0 || $1=="") {print $1} \
+else if($1~/^1.*$/) {print 1}
+else {print 0}}' >dmg/eur.txt
+```
+The mask is saved as __eur.txt__, where 1=European, 0=otherwise. Here
+we list the sample size of each category in UKB provided by variable
+__eth__ and the self derived mask __eur__:
+
+```{sh, eval=TRUE}
+w=$GRP/ukb/dat/phe; cd $w
+echo "Ethnic Group:"
+tail -n+2 dmg/eth.txt | sort | uniq -c | sort -k2,2n
+echo "European Ancestory:"
+tail -n+2 dmg/eur.txt | sort | uniq -c | sort -k2,2n
+```
+
+# Genotyping Process and Quality
+
+## UKB Provided
+
+  * Genetic kinship to other participants
+    - Categorical (single)
+    - COL=3149, UID=22021-0.0, N=488339
+      * -1 Participant excluded from kinship inference process
+      *  0 No kinship found
+      *  1 At least one relative identified
+      * 10 Ten or more third-degree relatives identified
+  * Outliers for heterozygosity or missing rate
+    - Categorical (single), 1=YES (no "No", only NA)
+    - COL=3155, UID=22027-0.0, N=968
+  * Missingness, sample-wise
+    - Continuous
+    - COL=3103, UID=22005-0.0, N=488339
+  * Genetic principal components (first 40)
+    - Continuous
+    - COL=3107-3146, UID=22009-0.1 - 22009-0.40, N=488339
+    
+```{sh genotyping, eval=FALSE}
+w=$GRP/ukb/dat/phe; cd $w
+mkdir -p gno
+zcat 001.txt.gz | cut -f3149      > gno/kin.txt # kins
+zcat 001.txt.gz | cut -f3155      > gno/out.txt # outliers for het or
+                                                # missing
+zcat 001.txt.gz | cut -f3103      > gno/mis.txt # missing rate
+zcat 001.txt.gz | cut -f3107-3146 > gno/pcs.txt # principal components
+```
+
+Here are the counts for kinship and genotyping outliers:
+```{sh, eval=TRUE}
+w=$GRP/ukb/dat/phe; cd $w
+echo "kinship:"
+tail -n+2 gno/kin.txt | sort | uniq -c | sort -k2,2n
+echo "outlier:"
+tail -n+2 gno/out.txt | sort | uniq -c | sort -k2,2n
+```
+
+## Mark Unrelatedness
+
+To extract unrelated samples, we break each kinship by marking
+all but one of the relatives for removal. 
+
+UKB prepared genetic kinship matrix for highly related individuals,
+which have been saved as __{p}/dat/rel.txt__. See section
+**Relatedness** in __dwn.Rmd__ for details.
+
+There are 5 columns in __{p}/dat/rel.txt__:
+
+  1. ID1: ID for the first individual of the pair
+  2. ID2: ID for the second individual of the pair
+  3. HetHet: Proportion of SNPs with double heterozygotes (e.g., AG and AG)
+  4. IBS0: Porportion of SNPs with zero IBS (identical-by-state) (e.g., AA and GG)
+  5. Kinship: Estimated kinship coefficient from the SNP data
+
+We will work on the first two columns (ID1 and ID2).
+
+__note:__ the ID of non-zero, non-blank entries in __gno/kin.txt__,
+produced in the previous section __Genotype Quality__, are identical
+to those appeared in __{p}/dat/rel.txt__, which validates that UKB
+only present relationship measures (i.e., IBS, kinship) for
+individuals who are sufficiently close, that is, __"rel.txt"__
+represents a rather sparse relatedness matrix.
+
+
+```{sh, eval=FALSE}
+p=$GRP/ukb                      # project home
+w=$GRP/ukb/dat/phe; cd $w       # working direcotry
+
+# UKB provided relatedness, the ID pairs
+awk <$p/dat/rel.txt 'NR>1 {print $1}' | sort -k1b -u > rel.id1
+awk <$p/dat/rel.txt 'NR>1 {print $2}' | sort -k1b -u > rel.id2
+
+# set of all ID - related set 1  -> unrelatedness mask 1
+echo "ur1" > gno/ur1.txt
+tail -n+2 eid | join - rel.id1 -a 1 -o 2.1 | awk '{print $1==""}' >> gno/ur1.txt
+# set of all ID - related set 2  -> unrelatedness mask 2
+echo "ur2" > gno/ur2.txt
+tail -n+2 eid | join - rel.id2 -a 1 -o 2.1 | awk '{print $1==""}' >> gno/ur2.txt
+
+rm rel.id[12]
+```
+Unrelated individuals are now marked by __gno/ur1.txt__ or
+__gno/ur2.txt__.
+
+
+# Blood Pressure
+
+## UKB Provided
+
+  * DBP, auto-reading, Integer
+    - Visit 0 (baseline), 
+      * COL=726, UID=4079-0.0, N=468,148, reading 1
+      * COL=727, UID=4079-0.1, N=461,365, reading 2
+    - Visit 1, 
+      * COL=728, UID=4079-1.0, N= 20,195, reading 1
+      * COL=729, UID=4079-1.1, N= 20,203, reading 2
+    - Visit 2, 
+      * COL=730, UID=4079-2.0, N= 19,555, reading 1
+      * COL=731, UID=4079-2.1, N= 19,508, reading 2
+
+  * SBP, auto-reading, Integer
+    - Visit 0 (baseline), 
+      * COL=732, UID=4080-0.0, N=468,135, reading 1
+      * COL=733, UID=4080-0.1, N=461,361, reading 2
+    - Visit 1, 
+      * COL=734, UID=4080-1.0, N= 20,189, reading 1
+      * COL=735, UID=4080-1.1, N= 20,202, reading 2
+    - Visit 2, 
+      * COL=736, UID=4080-2.0, N= 19,555, reading 1
+      * COL=737, UID=4080-2.1, N= 19,507, reading 2
+    
+for now, we use the 2nd auto-reading to counter "doctor's
+bias".
+
+```{sh, eval=FALSE}
+w=$GRP/ukb/dat/phe; cd $w	# working direcotry
+mkdir -p dbp
+## DBP, V0 R2, V1 R2, V2 R2
+zcat 001.txt.gz | cut -f727 | awk 'NR>1 && $1!="" {$1=log($1+1)};{print}' > dbp/v00.txt
+zcat 001.txt.gz | cut -f729 | awk 'NR>1 && $1!="" {$1=log($1+1)};{print}' > dbp/v01.txt
+zcat 001.txt.gz | cut -f731 | awk 'NR>1 && $1!="" {$1=log($1+1)};{print}' > dbp/v02.txt
+ln -s dbp/v00.txt dbp.txt       # default to visit 0
+
+mkdir -p sbp
+## SBP, V0 R2, V1 R2, V2 R2
+zcat 001.txt.gz | cut -f733 | awk 'NR>1 && $1!="" {$1=log($1+1)};{print}' > sbp/v00.txt
+zcat 001.txt.gz | cut -f735 | awk 'NR>1 && $1!="" {$1=log($1+1)};{print}' > sbp/v01.txt
+zcat 001.txt.gz | cut -f737 | awk 'NR>1 && $1!="" {$1=log($1+1)};{print}' > sbp/v02.txt
+ln -s sbp/v00.txt sbp.txt       # default to visit 0
+```
+
+# Smoking
+
+## UKB Provided
+
+  * current smoking
+    - COL=330, UID=1239-0.0, N=501699
+    - Categorical (single)
+      *  1=Yes, on most or all days
+      *  2=Only occasionally
+      *  0=No
+      * -3=Prefer not to answer
+    - ask all individuals
+
+  * past smoking
+    - COL=333, UID=1249-0.0, N=462450
+    - Categorical (single)
+      *  1=Smoked on most or all days
+      *  2=Smoked occasionally
+      *  3=Just tried once or twice
+      *  4=I have never smoked
+      * -3=Prefer not to answer
+    - only ask current non-smoker or ocassional smokers, that
+    is, those who answered other than __1=Smoked on most or all
+    days__ on __1239: current smoking__.
+
+  * light smoker? (least 100 smokes in lifetime)
+    - COL=561, UID=2644-0.0, N=137581;
+    - Categorical (single), 1=Yes, 0=No, -1=Do not know, -3=
+    Prefer not to answer;
+    - only ask past non smoker or ocassional smokers, that is,
+    those who answered __2=smoked occasionally__ or __3=Just
+    tried once or twice__ on __1249: past smoking__.
+
+  * ever smoking (binary)
+    - COL=2395, UID=20160-0.0, N=499704;
+    - Categorical (single), 1=Yes, 0=No;
+    - Derived from __1239: current tobacco smoking__ and
+    __1249: past smoking__;
+    - those answed __-1=Do not know__, __-3=Prefer not to
+    answer__, and __-7=None of the above__, were not coded (left
+    empty)
+
+  * pack years of smoking (accumulative)
+    - COL=2398, UID=20161-0.0, N=150965
+    - Continuous
+    - derived for individuals ever smoked (2395, 1=YES), who
+    indicated that they __"1=Yes, on most or all days"__
+    currently (1239), or __"1=Smoked on most or all days"__ in the
+    past (1249).
+      * cigarette per day / 20 * (Age stop - Age start)
+      * cigarette per day / 20 * (Age stop - Age start - 0.5) for
+      individuals who	gave up smoking for more than 6 Months;
+    - Age start is capped at 16;
+    - coded __empty__ for those who smoked but gave up before 16;
+    - coded __0__ for those who have given up smoking for more
+    than 6 Months in the same year they
+    started smoking.
+
+  * packs per year of smoking (density)
+    - COL=2401, UID=20162-0.0, N=150965
+    - Continuous
+    - Calculated using __2395:pack-years__:
+      * Pack years / (Age at recruitment - 16)
+
+```{sh smoking, eval=FALSE}
+w=$GRP/ukb/dat/phe; cd $w	# working direcotry
+mkdir -p smk
+zcat 001.txt.gz | cut -f330  > smk/now.txt # current
+zcat 001.txt.gz | cut -f333  > smk/hst.txt # past
+zcat 001.txt.gz | cut -f561  > smk/lit.txt # light
+zcat 001.txt.gz | cut -f2395 > smk/bin.txt # ever
+zcat 001.txt.gz | cut -f2398 > smk/pky.txt # pack * year
+zcat 001.txt.gz | cut -f2401 > smk/ppy.txt # pack / year
+```
+
+## Self Derived
+
+Fill the blanks in __20161: pack years of smoking__,
+and __20162: pack per year of smoking__,
+
+  * for individuals who are reportedly light or never smokers, set
+  both __20161__ and __20162__ to **0**.
+  * the rest are left as they were;
+  * to identify light smokers and never smokers, check non-empty
+  entries in __20160: ever smoking__ which has been saved as
+  __"smk/bin"__.
+
+```{sh, eval=FALSE}
+p=$GRP/ukb; w=$p/dat/phe; cd $w
+echo "smk.acc" > smk/acc.txt
+paste smk/{pky,bin}.txt | tail -n+2 | \
+    awk -v FS=$'\t' '{print $1=="" && $2!="" ? 0 : $1}' >> smk/acc.txt
+echo "smk.frq" > smk/frq.txt
+paste smk/{ppy,bin}.txt | tail -n+2 | \
+    awk -v FS=$'\t' '{print $1=="" && $2!="" ? 0 : $1}' >> smk/frq.txt
+```
+The derived varialbes are samed as __"smk/acc.txt"__ (accumulation),
+and __"smk/frq.txt"__ (frequency), respectively.
+
+Here we show the number of blanks for UKB provided variables versus
+self-derived ones:
+
+### Accumulated Smoking
+```{sh}
+p=$GRP/ukb; w=$p/dat/phe; cd $w
+grep -c "^$" smk/pky.txt    # UKB provided
+grep -c "^$" smk/acc.txt    # self derived
+```
+
+### Frequency of Smoking
+```{sh}
+p=$GRP/ukb; w=$p/dat/phe; cd $w
+grep -c "^$" smk/ppy.txt    # UKB provided
+grep -c "^$" smk/frq.txt    # self derived
+```
+
+# Drinking
+
+## UKB Provided
+
+__Alcohol Intake Frequency__
+
+  * COL=423, UID=1558-0.0, N=501693;
+  * Categorical (single)
+    -  1 Daily or almost daily
+    -  2 Three or four times a week
+    -  3 Once or twice a week
+    -  4 One to three times a month
+    -  5 Special occasions only
+    -  6 Never
+    - -3 Prefer not to answer
+
+```{sh, eval=FALSE}
+w=$GRP/ukb/dat/phe; cd $w
+mkdir -p $w/alc
+zcat 001.txt.gz | cut -f423  > alc/int.txt # retrive
+tail -n+2 alc/int.txt | sort -n | uniq -c  # counts
+```
+
+__Weekly Drinkers__
+
+How many glasses per week? Collected from participants
+who reportedly drink more than once or twice a week,
+defined by answering 1, 2, or 3 for __1558: Alcohol
+Intake Freuency__.
+
+  * Average weekly red wine intake
+    - COL=426, UID=1568-0.0, N=346545;
+    - Integer
+      * -1=Do not know
+      * -3=Prefer not to answer
+
+  * Average weekly champagne plus white wine intake
+    - COL=429, UID=1578-0.0, N=346544
+    - Integer
+      * -1=Do not know
+      * -3=Prefer not to answer
+
+  * Average weekly beer plus cider intake
+    - COL=432, UID=1588-0.0, N=346544
+    - Integer
+      * -1=Do not know
+      * -3=Prefer not to answer
+
+  * Average weekly spirits intake
+    - COL=435, UID=1598-0.0, N=346544
+    - Integer
+      * -1=Do not know
+      * -3=Prefer not to answer
+
+  * Average weekly fortified wine intake
+    - COL=438, UID=1608-0.0, N=346544
+    - Integer
+      * -1=Do not know
+      * -3=Prefer not to answer
+
+```{sh, eval=FALSE}
+p=$GRP/ukb; w=$p/dat/phe; cd $w
+mkdir -p alc/wek
+zcat 001.txt.gz | cut -f426  > alc/wek/red.txt # red wine
+zcat 001.txt.gz | cut -f429  > alc/wek/chp.txt # champagne
+zcat 001.txt.gz | cut -f432  > alc/wek/bpc.txt # beer plus cider
+zcat 001.txt.gz | cut -f435  > alc/wek/spr.txt # spirits
+zcat 001.txt.gz | cut -f438  > alc/wek/ftw.txt # fortified wine
+```
+
+__Monthly Drinkers__
+
+How many glasses per month? Collected from those who
+reportedly drink on special occasions or one to three
+times a month, as defined by answering 4 or 5 on __1558:
+Alcohol Intake Frequency__.
+
+  * Average monthly red wine intake
+    - COL=1314, UID=4407-0.0, N=40838
+    - Integer
+      * -1=Do not know
+      * -3=Prefer not to answer
+  * Average monthly champagne plus white wine intake
+    - COL=1317, UID=4418-0.0, N=40838
+    - Integer
+      * -1=Do not know
+      * -3=Prefer not to answer
+  * Average monthly beer plus cider intake
+    - COL=1320, UID=4429-0.0, N=40838
+    - Integer
+      * -1=Do not know
+      * -3=Prefer not to answer
+  * Average monthly spirits intake
+    - COL=1323, UID=4440-0.0, N=40838
+    - Integer
+      * -1=Do not know
+      * -3=Prefer not to answer
+  * Average monthly fortified wine intake
+    - COL=1326, UID=4451-0.0, N=40838
+    - Integer
+      * -1=Do not know
+      * -3=Prefer not to answer
+
+```{sh, eval=FALSE}
+p=$GRP/ukb; w=$p/dat/phe; cd $w
+mkdir -p alc/mon
+zcat 001.txt.gz | cut -f1314  > alc/mon/red.txt # red wine
+zcat 001.txt.gz | cut -f1317  > alc/mon/chp.txt # champagne
+zcat 001.txt.gz | cut -f1320  > alc/mon/bpc.txt # beer plus cider
+zcat 001.txt.gz | cut -f1323  > alc/mon/spr.txt # spirits
+zcat 001.txt.gz | cut -f1326  > alc/mon/ftw.txt # fortified wine
+```
+
+**Caution:** weekly and monthly consumers are not overlapped!
+
+
+## Self Derived
+
+We would like to derive the combined average units of alchohol
+consuption per week.
+
+  * _beer plus cider_ is considered 2 units of alcohol;
+  * the rest are considered 1 units of alcohol;
+  * the monthly drinker's units is converted to weekly standards, by
+  multiplying with 12 then dividing with 52.
+  * blanks in specific alcohol items are treated as 0 glass per week
+  or per month, since they resulted from answing __6=Never__ or
+  __-3=Prefer not to answer__ for __1558: Alcohol Intake Frequency__.
+  * answering __"-1=Do not know"__ for any alcohol item is also seen
+  as 0 glass per week or per month.
+  * answering __"-3=Prefer not to answer"__ for any alcohol item is
+  treated as missing.
+
+```{sh, eval=FALSE}
+cd $GRP/ukb/dat/phe
+# weekly
+paste alc/{wek/{bpc,red,chp,spr,ftw},int}.txt | awk -v FS=$'\t' ' \
+NR==1 {print "alc.wek"} \
+NR>1 {\
+    if($6~"^[1-3]$" && $0!~"-3") {gsub(-1,0); s=$1*2+$2+$3+$4+$5} \
+    else if($6==6) {s=0} \
+    else {s=""}; \
+    print s}' > alc/wek.txt
+
+# monthly
+paste alc/{mon/{bpc,red,chp,spr,ftw},int}.txt | awk -v FS=$'\t' '
+NR==1 {print "al.mon"}
+NR>1 {
+    if($6~"^[4-5]$" && $0!~"-3") {gsub(-1,0); s=$1*2+$2+$3+$4+$5}
+    else if($6==6) {s=0}
+    else {s=""};
+    print s}' > alc/mon.txt
+
+# summerize
+paste alc/{wek,mon}.txt | awk -v OFS=$'\t' '
+NR==1 {print "alc.frq"}
+NR >1 {
+    if($1=="" && $2=="") {s=""}
+    else {s=$1 + $2 * 12 / 52}
+    print s}' > alc/frq.txt
+```
+There are some nuanse here:
+
+  * Despite weekly drinkers always reporting at least one item
+  specific consumption, the majority of monthly drinkers reported
+  none, even if they had chosen __4=one to three times per month__ or
+  __5=on special occasions only__ for __1558__. For monthly drinkers
+  that answered none of the item specific consumption, we let their
+  sum of alcohol unit per month be 0.
+  * when GNU awk does addition, it treats blanks as 0s.
+
+# Cannabis Use
+
+## UKB Provided
+
+  * Ever taken cannabis
+    - COL=2954, UID=20453-0.0, N=157362
+    - Categorical (single)
+      * 0=No
+      * 1=Yes, 1-2 times
+      * 2=Yes, 3-10 times
+      * 3=Yes, 11-100 times
+      * 4=Yes, more than 100 times
+      * -818=Prefer not to answer
+    - Question asked: "Have you taken CANNABIS (marijuana, grass, hash,
+    ganja, blow, draw, skunk, weed, spliff, dope), even if it was a long
+    time ago?"
+
+  * Maximum frequency of taking cannabis
+    - COL=2955, UID=20454-0.0, N=34887
+    - Categorical (single)
+      * 1=Less than once a month
+      * 2=Once a month or more, but not every week
+      * 3=Once a week or more, but not every day
+      * 4=Every day
+      * -818=Prefer not to answer
+      * -121=Do not know
+    - Question asked: "Considering when you were taking cannabis most
+    regularly, how often did you take it?"
+    - Question was asked unless the answer to __20453: Ever taken
+    cannabis__ was __0=No__.
+	
+```{sh, eval=FALSE}
+cd $GRP/ukb/dat/phe
+mkdir cnb
+zcat 001.txt.gz | cut -f2954  > cnb/use.txt # count
+zcat 001.txt.gz | cut -f2955  > cnb/max.txt # max frequency
+```
+	
+## Self Derived
+
+Create a cannibus frequency measure by modifying the entries in
+__20454: Maximum frequency of taking cannabis__, that is, those who
+answered __0=No__ to __20453:__ Ever taken cannabis__ is given a value
+of 0; those who answed -818 or -121 for __20454: Maximum frequency of
+taking cannabis__ are set to blank (NA).
+
+When done, make this variable as the representative of cannibus
+through soft link.
+
+```{sh, eval=FALSE}
+cd $GRP/ukb/dat/phe
+paste cnb/{use,max}.txt | awk '
+    NR==1 {print $2}
+    NR >1 {if($1==0) $2=0; if($2<0) $2=""; print $2}' > cnb/frq.txt
+ln -sf cnb/frq.txt cnb.txt
+```
+
+# Brain Volume
+
+We use variable directly from UKB. They are all continuous.
+
+  * v00: 3340 25000-2.0 14520 Volumetric scaling from
+    T1 head image to standard space
+  * v01: 3341 25001-2.0 14520 peripheral cortical grey
+    matter (normalised for head size)
+  * v02: 3342 25002-2.0 14520 peripheral cortical grey
+    matter
+  * v03: 3343 25003-2.0 14520 ventricular cerebrospinal
+    fluid (normalised for head size)
+  * v04: 3344 25004-2.0 14520 ventricular cerebrospinal
+    fluid
+  * v05: 3345 25005-2.0 14520 grey matter (normalised
+    for head size)
+  * v06: 3346 25006-2.0 14520 grey matter
+  * v07: 3347 25007-2.0 14520 white matter (normalised
+    for head size)
+  * v08: 3348 25008-2.0 14520 white matter
+  * v09: 3349 25009-2.0 14520 brain, grey+white matter
+    (normalised for head size)
+  * v10: 3350 25010-2.0 14520 brain, grey+white matter
+  * v11: 3351 25011-2.0 14503 thalamus (left)
+  * v12: 3352 25012-2.0 14503 thalamus (right)
+  * v13: 3353 25013-2.0 14503 caudate (left)
+  * v14: 3354 25014-2.0 14503 caudate (right)
+  * v15: 3355 25015-2.0 14503 putamen (left)
+  * v16: 3356 25016-2.0 14503 putamen (right)
+  * v17: 3357 25017-2.0 14503 pallidum (left)
+  * v18: 3358 25018-2.0 14503 pallidum (right)
+  * v19: 3359 25019-2.0 14503 hippocampus (left)
+  * v20: 3360 25020-2.0 14503 hippocampus (right)
+  * v21: 3361 25021-2.0 14503 amygdala (left)
+  * v22: 3362 25022-2.0 14503 amygdala (right)
+  * v23: 3363 25023-2.0 14503 accumbens (left)
+  * v24: 3364 25024-2.0 14503 accumbens (right)
+  * v25: 3365 25025-2.0 14503 brain stem + 4th ventricle
+
+
+```{sh, eval=FALSE}
+cd $GRP/ukb/dat/phe
+# all volumns
+zcat 001.txt.gz | cut -f3340-3365  > bvl.txt
+# separate
+mkdir -p bvl
+for i in {001..026}; do
+    cut -f$i bvl.txt > bvl/$i.txt
+done
+rm -rf bvl.txt
+```
+
+# Medications at baseline
+
+## UKB Provided
+  
+  * cholesterol, blood pressure, diabetes, or take
+  exogenous hormones
+    - female version of field 6177
+    - Categorical (multiple)
+      * COL=1554, UID=6153-0.0, N=270,909
+      * COL=1555, UID=6153-0.1, N= 24,602
+      * COL=1556, UID=6153-0.2, N=  2,415
+      * COL=1557, UID=6153-0.3, N=     93
+    - Choices (8)
+      *  1=Cholesterol lowering medication
+      *  2=Blood pressure medication
+      *  3=Insulin
+      *  4=Hormone replacement therapy
+      *  5=Oral contraceptive pill or minipill
+      * -7=None of the above
+      * -1=Do not know
+      * -3=Prefer not to answer
+
+  * pain relief, constipation, heartburn
+    - Categorical (multiple)
+      * COL=1566, UID=6154-0.0, N=497,883
+      * COL=1567, UID=6154-0.1, N= 71,518
+      * COL=1568, UID=6154-0.2, N= 13,370
+      * COL=1569, UID=6154-0.3, N=  1,581
+      * COL=1570, UID=6154-0.4, N=    155
+      * COL=1571, UID=6154-0.5, N=     14
+    - Choices (9)
+      *  1=Aspirin
+      *  2=Ibuprofen (e.g. Nurofen)
+      *  3=Paracetamol
+      *  4=Ranitidine (e.g. Zantac)
+      *  5=meprazole (e.g. Zanprol)
+      *  6=Laxatives (e.g. Dulcolax, Senokot)
+      * -7=None of the above
+      * -1=Do not know
+      * -3=Prefer not to answer
+
+  * cholesterol, blood pressure or diabetes
+    - male version of field 6153
+    - Categorical (multiple) 
+      * COL=1668, UID=6177-0.0, N=226,975
+      * COL=1669, UID=6177-0.1, N= 34,433
+      * COL=1670, UID=6177-0.2, N=  1,922
+    - Choices (6)
+      *  1=Cholesterol lowering medication
+      *  2=Blood pressure medication
+      *  3=Insulin
+      * -7=None of the above
+      * -1=Do not know
+      * -3=Prefer not to answer
+
+
+# Non-cancer illness at baseline
+
+This is a compounded phenotype organized in a hierarchy, presented as
+29 columns of choices. Its extraction and reformating will be diffcult
+and much more scripting is required.
+
+## UKB provided
+
+  * Categorical (up to 29 multiple choices)
+    - COL=2073, UID= 20002-0.0, N=375,103
+    - COL=2074, UID= 20002-0.1, N=241,006
+    - ...
+    - COL=2101, UID=20002-0.28, N=      1
+  
+Extract all 29 columes and save as __{p}/dat/phe/ill/raw__, where {p}
+denotes project root.
+
+```{sh, eval=FALSE}
+p=$GRP/ukb; w=$p/dat/phe; cd $w
+mkdir -p                            ill
+zcat 001.txt.gz | cut -f2073-2101 > ill/raw
+```
+
+Comming next are a few objectives:
+
+  * each illnesses should have its own corresponding single column
+    file as a phenotype, coupled with some meta data files;
+  * the phenotype and meta data should be organized in directories
+  that mirrors the classification and hierarchy of illness;
+  * since most illnesses have been selected by only a few fraction of
+  UKB participants, one should aggregate them into more general class
+  to achive large number of cases.
+
+Went to http://biobank.ndph.ox.ac.uk/showcase/coding.cgi?id=6 and
+pressed the __download__ button to retrive a TSV file which is the
+code book and hierarchy of illnesses. We removed its header and saved
+it as __{p}/dat/phe/ill/fds__.
+
+
+```{sh, eval=FALSE}
+p=$GRP/ukb; w=$p/dat/phe/ill; cd $w
+
+# create illness hierarchy, phenotype, and meta data files.
+while IFS=$'\t' read -r c m n p s; do
+    # c=code, m=meaning, n=node (child), p=parent, s=selectable
+    echo -e "$c\t$n\t$p\t$s\t$m"
+
+    ## 1) file directories mirrors the hieracy of illness
+    # make parent if it is not exist and not a root node
+    [ $p -eq 0 ] && p=root
+    [ !  -d $p ] && mkdir $p
+
+    # skip the non-sense
+    [ $n -gt 9999 ] &&  continue
+
+    # make the child if necessary.
+    [ -d $p/$n -o -d $n ] || mkdir $n
+
+    # move the child under its parent and link to it from the top.
+    if [ ! -L $n ]; then
+	[ -d $p/$n ] || mv $n $p/$n
+	ln -s $p/$n $n
+    fi
+
+    ## 2) write selectable phenotype and meta data under
+    ## corresponding directory
+    [ $s = Y -a ! -e $n/phe ] && \
+	awk <raw -v m="$m" -v c=$c \
+	    'NR==1 {print m}; NR>=2 {print $0~c}' >$n/phe
+
+    ## record illness code
+    [ ! -e $n/icd -a $c -gt 0 ] && echo $c > $n/icd
+
+    ## record illness name
+    [ ! -e $n/inm ] && echo "$m" > $n/inm
+done <fds
+
+
+# create absolute links by illness node number and code
+mkdir -p node
+mkdir -p code
+for d in $(find root -mindepth 1 -type d); do
+    ln -sf $(pwd)/$d node/${d##*/}
+    [ -e $d/icd ] && ln -sf $(pwd)/$d code/$(cat $d/icd)
+done
+
+
+# aggregate phenotype for more cases
+function agg {
+    echo "agg $1"
+
+    # resursion: aggregate me, aggregate my children first
+    for d in $(find $1 -mindepth 1 -maxdepth 1 -type d)
+    do
+        agg $d
+    done
+
+    # add up all children's aggregation and my own phenotype
+    if [ ! -e $1/agg ]; then
+	f=$(find $1 -mindepth 2 -maxdepth 2 -name agg)
+	g=$(find $1 -mindepth 1 -maxdepth 1 -name phe)
+	if [ -z "$f" ]; then
+	    ln -s phe $1/agg	# only my own phenotype
+	else
+	    hdr=$([ -e $1/inm ] && cat $1/inm || echo "")
+	    echo "$hdr"                          > $1/agg
+	    paste -d+ $f $g | tail -n+2 | bc    >> $1/agg
+	fi
+    fi
+
+    # set up binary (dichotomized) phenotype
+    if [ ! -e $1/any ]; then
+	if [ -L $1/agg ]; then
+	    ln -s phe $1/any	# only my own phenotype
+	else
+	    awk <$1/agg 'NR==1 {print}; NR>=2 {print ($1>0)}' \
+		>$1/any
+	fi
+    fi
+}
+agg root
+
+# count the number of cases and sort them
+for f in $(find root -name any); do
+    c=$(grep 1 $f | wc -l);
+    i=NULL
+    n=NULL
+    [ -e ${f%/*}/icd ] && i=$(cat ${f%/*}/icd)
+    [ -e ${f%/*}/inm ] && n=$(cat ${f%/*}/inm)
+    echo -e "$c\t$i\t${f%/*}\t$n"
+done | sort -k1,1n > case
+
+# note: blanks in phenotype files are treated as 0 by __bc__, so no
+# harm will done using bc to aggregate cases. to remove, use:
+# 
+# find root -name agg -exec rm {} \;
+# find root -name any -exec rm {} \;
+
+# clean up temporary links
+find -type l -exec rm {} \;
+# or: for f in *; do [ -h $f ] && rm $f; done
+
+cd ..
+```
+
+At this point, directory __{p}/dat/phe/ill__ contains:
+
+  * root: the starting point of illness hierarchy;
+  * node: direct links to illness by node number;
+  * code: direct links to illness by code number;
+  * case: number of cases for both general and specific illnesses.
+
+
+```{sh, eval=TRUE}
+p=$GRP/ukb; w=$p/dat/phe/ill; cd $w
+tree -d root
+```
+
+Each illness' own directory has the following:
+
+  * __phe__: basic binary phenotype file of a single column and a
+    header.  The __phe__ file is only available for selectible nodes
+    (i.e., excluding general node like cardiovascular,
+    respiratory/ent, and cerebrovascular disease)
+  * __agg__: aggregation of child illnesses. For the most specific one
+    (i.e., the leave nodes), __agg__ is a link to the corresponding
+    __phe__ file; for any parent illness, an __agg__ is the sum of its
+    children's __agg__.
+  * __any__:  dichotomized version of __agg__ aggregated phenotypes.
+
+
+## selection
+
+We select a handful from a total of 494 phenotype based on popular
+literature or the abundance of cases (by __{p}/dat/phe/ill/case__).
+
+We allow illness phenotypes with at least 5% of the participants being
+cases to enter future analysis.
+```{sh, eval=TRUE}
+p=$GRP/ukb; w=dat/phe/ill; cd $w
+n=$(tail -n+2 raw | wc -l)		# sample size
+t=$[n/20]						# threshold
+
+awk -v FS=$'\t' -v t=$t <case '$1>=t' | expand -t 8,14,35
+```
+
+Here is the choices based on literatures:
+
+  * [2] 1071, NULL, 184,334  cardiovascular
+  * [1] 1536, 1473,  61,642  high cholesterol
+  * [1] 1248, 1223,   3,377  type 2 diabetes
+  * [1] 1591, 1528,     295  macular degeneration
+  * [2] 1521, 1461,   4,231  inflammatory bowel disease
+  * [1] 1522, 1462,   1,476  crohns disease
+  * [1] 1424, 1381,     642  systemic lupus erythematosis/sle
+
+The references:
+
+  1. The heritability of human disease: estimation, uses and abuses
+  2. Genome-wide polygenic scores for common diseases identify
+     individuals with risk equivalent to monogenic mutations
+
+Still, we dropped any candidate with an inadequate number cases. In
+all, we collect the following illness, together with sample sizes:
+
+```{sh, eval=FALSE}
+p=$GRP/ukb; w=$p/dat/phe; cd $w
+
+# binary form
+ln -s ill/root/1079/any            g_b.txt  # gynaecology/breast
+ln -s ill/root/1078/any            h_m.txt  # haematology/dermatology
+ln -s ill/root/1080/1417/1430/any  h_a.txt  # hayfever/allergic rhinitis
+ln -s ill/root/1076/1269/1312/any  dpr.txt  # depression
+ln -s ill/root/1075/1249/any       thy.txt  # thyroid problem (not cancer)
+ln -s ill/root/1077/1320/any       bck.txt  # back problem
+ln -s ill/root/1073/1153/any       oed.txt  # oesophageal disorder
+ln -s ill/root/1073/1155/any       bwl.txt  # bowel problem
+ln -s ill/root/1076/1265/any       neu.txt  # neurology
+ln -s ill/root/1071/1082/any       hrt.txt  # heart/cardiac problem
+ln -s ill/root/1080/1417/any       aha.txt  # allergy/hypersensitivity/anaphylaxis
+ln -s ill/root/1076/1269/any       psp.txt  # psychological/psychiatric problem
+ln -s ill/root/1077/1321/1525/any  ost.txt  # osteoarthritis
+ln -s ill/root/1080/any            isd.txt  # immunological/systemic disorders
+ln -s ill/root/1075/any            end.txt  # endocrine/diabetes
+ln -s ill/root/1072/1130/any       ast.txt  # asthma
+ln -s ill/root/1071/1536/any       hcl.txt  # high cholesterol
+ln -s ill/root/1077/1321/any       jtd.txt  # joint disorder
+ln -s ill/root/1073/any            gst.txt  # gastrointestinal/abdominal
+ln -s ill/root/1076/any            nep.txt  # neurology/eye/psychiatry
+ln -s ill/root/1072/any            rsp.txt  # respiratory/ent
+ln -s ill/root/1077/any            msc.txt  # musculoskeletal/trauma
+ln -s ill/root/1071/1081/any       hpt.txt  # hypertension
+ln -s ill/root/1071/any            cdv.txt  # cardiovascular
+ln -s ill/root/any                 ibn.txt  # illness (bin)
+ln -s ill/root/agg                 icn.txt  # illness (con)
+```
+
+__note__: illness phenotypes have no missing values at all, as a
+self-reported result, the blanks can be regarded as reportedly 0, even
+if the participants themselves may either not be aware of their
+illness or willingly chose to not report.
+
+
+# Cognitive at base line
+
+## UKB Provided
+
+  * Fluid intelligence score (baseline)
+    - COL = 2247, UID = 20016-0.0, N = 165,481
+    - Integer
+
+  * Prospective memory result
+    - COL = 2250, UID = 20018-0.0, N = 171,573
+    - Categorical (single)
+      * 0 Instruction not recalled, either skipped or incorrect
+      * 1 Correct recall on first attempt
+      * 2 Correct recall on second attempt
+    - By the time of Mar 27, 2019, the sample size for category 0, 1 and
+    2 are 10,849, 177,261, and 38,335, respectively; it would be better
+    to combine category 0 and 2 as case (fail), and 1 as control
+    (success).
+
+  * Mean time to correctly identify matches
+    - COL = 2253, UID = 20023-0.0, N = 496,762
+    - Integer
+
+```{sh, eval=FALSE}
+p=$GRP/ukb; w=$p/dat/phe; cd $w
+mkdir -p cog
+zcat 001.txt.gz | cut -f2247 > cog/fis.txt # fluid intel. score
+zcat 001.txt.gz | awk -v FS=$'\t' '
+{
+    print (NR==1||$2250==""?$2250:$2250!=1)
+}'                           > cog/pmr.txt # prospective memory
+zcat 001.txt.gz | cut -f2253 > cog/mtm.txt # mean time to identify
+
+# link from the root of phenotypes
+ln -s cog/* ./
+```
+  
+# Mental
+
+## UKB Provided
+
+  * Bipolar and major depression status
+    - COL = 2267, UID = 20126-0.0, N = 122,989
+    - Categorical (single)	
+      * 0 (89,527) No Bipolar or Depression
+      * 1 (   808) Bipolar I Disorder
+      * 2 (   807) Bipolar II Disorder
+      * 3 ( 8,904) Probable Recurrent major depression (severe)
+      * 4 (15,011) Probable Recurrent major depression (moderate)
+      * 5 ( 7,925) Single Probable major depression episode8 
+    - the sample size shown above is from 13, Apr, 2019
+    - It is better to combine all disorder status in order to have enough
+    cases.
+  * Neuroticism score
+    - COL = 2268, UID = 20127-0.0, N = 401,636
+    - Integer
+  
+```{sh, eval=FALSE}
+p=$GRP/ukb; w=$p/dat/phe; cd $w
+mkdir -p mtl
+zcat 001.txt.gz | awk -v FS=$'\t' '
+{
+    print (NR==1||$2267==""?$2267:$2267>0)
+}'                           > mtl/bpl.txt # fluid intel score
+zcat 001.txt.gz | cut -f2268 > mtl/nrt.txt # neuroticism score
+
+# link from the root of phenotype
+ln -s mtl/* ./
+```
+
+# Cancer
+
+## UKB provided
+
+  * Categorical (up to ?? multiple choices)
+    - COL=4321, UID=40006-0.0 , N= 69,060
+    - COL=4322, UID=40006-1.0 , N= 63,541
+    - ...
+    - COL=4352, UID=40006-31.0, N=      1
+  * All, N=19,154  
+  
+Extract all 32 columes and save as __{p}/dat/phe/can/raw__, where {p}
+denotes project root.
+
+```{sh, eval=FALSE}
+p=$GRP/ukb; w=$p/dat/phe; cd $w
+mkdir -p                            can
+zcat 001.txt.gz | cut -f4321-4352 > can/raw
+```
+
+Process cancer data the same manner as non-cancer illnesses in a
+previous section.
+
+  * each cancer should have its own single column file as a phenotype,
+    coupled with some meta data files;
+  * the phenotype and meta data should be organized in directories that
+    mirrors the classification and hierarchy of cancer;
+  * since cancers are rare, one should aggregate them into more general
+    class to achive large number of cases.
+
+Go to http://biobank.ndph.ox.ac.uk/showcase/coding.cgi?id=19 and grab
+code book "ICD10 - WHO International Classification of Diseases" in
+TSV format, which lists the hierarchy of diseases including cancers.
+
+Remove its header and save it as __{p}/dat/phe/can/icd__. Fields in
+the code file includes:
+
+  1. coding
+  2. meaning
+  3. node_id
+  4. parent_id
+  5. selectable
+
+where the 1st field (coding) corresponds to values appeared in those
+32 columns, while the 4th and 5th construct the hierarchy of disease.
+
+However, we only require cancers. According to
+http://biobank.ndph.ox.ac.uk/showcase/field.cgi?id=40006, cancers are
+are assigned with code C00-C97, and D00-D48. 
+
+According to ICD code book either just downloaded or the on on
+http://biobank.ndph.ox.ac.uk/showcase/coding.cgi?id=19&nl=1, cancer
+diseases are put under a top level node with an ID of __2__:
+
+  * coding     = Chapter II
+  * meaning    = Chapter II Neoplasms
+  * node_id    = 2
+  * parent_id  = 0
+  * selectable = N
+ 
+It is better to create the tree structure of diseases but only under
+this node. First thing to do is to find in the code book __can/icd__
+all progeny nodes under #2
+```{sh, eval=FALSE}
+p=$GRP/ukb; w=$p/dat/phe/can; cd $w
+
+# initial node: #2
+echo -n   > fds                    # nodes under cancer
+echo    2 > P                      # parent list
+lvl=1
+sort icd -k4,4 -t $'\t' > srt  # sorted by node_id
+while true; do
+    # find nodes whose parents are listed in P
+    join <(sort -b P) srt -t $'\t' -1 1 -2 4 -o 2.1,2.2,2.3,2.4,2.5 \
+         >tmp
+    n=$(cat tmp | wc -l)
+    [ $n -gt 0 ] || break      # found nothing?
+    echo L$lvl: $(cat tmp | wc -l)
+    cat tmp >> fds              # append to list of cancer nodes
+    cut -f3 tmp >P              # update parent list
+    lvl=$[lvl+1]                # next level
+done
+rm P tmp
+```
+
+Here is the number of cancer nodes at different level of disease
+hierarchy:
+
+  1. 18
+  2. 138
+  3. 757
+
+The cancers are extracted form __icd__ and saved as __fds__. Now
+construct the tree structure.
+
+```{sh, eval=FALSE}
+p=$GRP/ukb; w=$p/dat/phe/can; cd $w
+
+# create cancer hierarchy, phenotype, and meta data files.
+while IFS=$'\t' read -r c m n p s; do
+    # c=code, m=meaning, n=node (child), p=parent, s=selectable
+    echo -e "$c\t$n\t$p\t$s\t$m"
+
+    ## 1) file directories mirrors the hierarchy of cancer
+    # make parent if it is not exist and not a root node
+    [ $p -eq 2 ] && p=root
+    [ !  -d $p ] && mkdir $p
+
+    # skip the non-sense
+    [ $n -gt 9999 ] &&  continue
+
+    # make the child if necessary.
+    [ -d $p/$n -o -d $n ] || mkdir $n
+
+    # move the child under its parent and link to it from the top.
+    if [ ! -L $n ]; then
+	[ -d $p/$n ] || mv $n $p/$n
+	ln -s $p/$n $n
+    fi
+
+    ## 2) write selectable phenotype and meta data under
+    ## corresponding directory
+    [ $s = Y -a ! -e $n/phe ] && \
+	awk <raw -v m="$m" -v c=$c \
+	    'NR==1 {print m}; NR>=2 {print $0~c"[\t\n]"}' >$n/phe
+
+    ## record cancer code
+    [ ! -e $n/icd ] && echo "$c" > $n/icd
+
+    ## record cancer name
+    [ ! -e $n/inm ] && echo "$m" > $n/inm
+done <fds
+
+# create absolute links by illness node number and code
+mkdir -p node
+mkdir -p code
+for d in $(find root -mindepth 1 -type d); do
+    ln -sf ../$d node/${d##*/}
+    [ -e $d/icd ] && ln -sf ../$d "code/$(cat $d/icd)"
+done
+
+# aggregate phenotype for more cases
+function agg {
+    echo "agg $1"
+
+    # resursion: aggregate me, aggregate my children first
+    for d in $(find $1 -mindepth 1 -maxdepth 1 -type d)
+    do
+        agg $d
+    done
+
+    # add up all children's aggregation and my own phenotype
+    if [ ! -e $1/agg ]; then
+	f=$(find $1 -mindepth 2 -maxdepth 2 -name agg)
+	g=$(find $1 -mindepth 1 -maxdepth 1 -name phe)
+	if [ -z "$f" ]; then
+	    ln -s phe $1/agg	# only my own phenotype
+	else
+	    hdr=$([ -e $1/inm ] && cat $1/inm || echo "")
+	    echo "$hdr"                          > $1/agg
+	    paste -d+ $f $g | tail -n+2 | bc    >> $1/agg
+	fi
+    fi
+
+    # set up binary (dichotomized) phenotype
+    if [ ! -e $1/any ]; then
+	if [ -L $1/agg ]; then
+	    ln -s phe $1/any	# only my own phenotype
+	else
+	    awk <$1/agg 'NR==1 {print}; NR>=2 {print ($1>0)}' \
+		>$1/any
+	fi
+    fi
+}
+agg root
+
+# count the number of cases and sort them
+for f in $(find root -name any); do
+    c=$(grep 1 $f | wc -l);
+    i=NULL
+    n=NULL
+    [ -e ${f%/*}/icd ] && i=$(cat ${f%/*}/icd)
+    [ -e ${f%/*}/inm ] && n=$(cat ${f%/*}/inm)
+    echo -e "$c\t$i\t${f%/*}\t$n"
+done | sort -k1,1n > case
+
+# note: blanks in phenotype files are treated as 0 by __bc__, so no
+# harm will done using bc to aggregate cases. to remove, use:
+# 
+# find root -name agg -exec rm {} \;
+# find root -name any -exec rm {} \;
+
+# clean up temporary links
+find -type l -exec rm {} \;
+# or: for f in *; do [ -h $f ] && rm $f; done
+```
+
+At this point, directory __{p}/dat/phe/can__ contains:
+
+  * root: the starting point of cancer hierarchy;
+  * node: direct links to cancer by node number;
+  * code: direct links to cancer by code number;
+  * case: number of cases for both general and specific canceres.
+
+```{sh, eval=TRUE}
+p=$GRP/ukb; w=$p/dat/phe/ill; cd $w
+tree -d root
+```
+
+Each cancer' own directory has the following:
+
+  * __phe__: basic binary phenotype file of a single column and a
+    header.  The __phe__ file is only available for selectible nodes
+    (i.e., excluding general node like cardiovascular,
+    respiratory/ent, and cerebrovascular disease)
+  * __agg__: aggregation of child canceres. For the most specific one
+    (i.e., the leave nodes), __agg__ is a link to the corresponding
+    __phe__ file; for any parent cancer, an __agg__ is the sum of its
+    children's __agg__.
+  * __any__:  dichotomized version of __agg__ aggregated phenotypes.
+
+Select a handful from a total of 914 phenotype based on the abundance
+of cases (see __{p}/dat/phe/can/case__).
+
+Allow cancer phenotype with enough cases enter future steps.
+```{sh, eval=TRUE}
+p=$GRP/ukb; w=$p/dat/phe/can; cd $w
+n=$(tail -n+2 raw | wc -l)		# sample size
+t=$[n/100]				# threshold
+
+awk -v FS=$'\t' -v t=$t <case '$1>=t' | expand -t 8,14,35
+```
+
+Here is the selection:
+
+  * Block C43-C44 48 21,406 C43-C44 Melanoma and other malignant
+    neoplasms of skin
+
+
+```{sh, eval=FALSE}
+p=$GRP/ukb; w=$p/dat/phe; cd $w
+
+# binary form
+ln -s can/root/any               can.txt # cancer
+ln -s can/root/48/any            c43.txt # melanoma and skin
+ln -s can/root/48/1425/any       c44.txt # skin
+ln -s can/root/50/1475/any       c50.txt # breast+
+ln -s can/root/59/any            d00.txt # In situ neoplasms
+ln -s can/root/52/any            c60.txt # male genital organs++
+ln -s can/root/52/1522/phe       c61.txt # prostate++
+```
+
+Notes: ++, men only; +, women only.
+
+__note__: illness phenotypes have no missing values at all, as a
+self-reported result, the blanks can be regarded as reportedly 0, even
+if the participants themselves may either not be aware of their
+illness or willingly chose to not report.
+
+# Post processing
+
+For most of the phenotypes the number of non-missing is far less the
+then tatal sample (N=500K). It is better to list these non-missing
+individual IDs for future use.
+
+The phenotype files are surfixed by "txt", alinged with the full ID
+list "__eid__" under "{w}/dat/phe", and the missing values are
+represented by empty "". We name the non-missing ID list by changing
+".txt" to ".eid".
+
+For self-reported illnesses, there is no missing value at all. As for
+cancers, some have no missing value, some only make sense to male or
+females. Therefore, we use 3 more dummy phenotype and the corresponding
+*.txt and  *.eid files:
+
+  * all  : all.eid
+  * men  : men.eid
+  * women: wmn.eid
+
+Illness and cancer phenotypes use these *.eid as filters for later
+processing. For example, to divided the genotype for any illness,
+use the full ID list __eid.eid__ to pick individuals, for breast
+cancer, use wmn.eid.
+
+```{sh, eval=FALSE}
+w=$GRP/ukb/dat/phe; cd $w
+tail -n+2 eid.col                        >all.eid
+paste {eid.col,dmg/sex.txt} \
+    | awk -v FS=$'\t' '$2==1 {print $1}' >men.eid
+paste {eid.col,dmg/sex.txt} \
+    | awk -v FS=$'\t' '$2==0 {print $1}' >wmn.eid
+for f in *.txt
+do
+    o=${f%.*}.eid
+    [ -e ill/$f ] && continue   # skip illness
+    [ -e can/$f ] && continue   # skip cancer
+    [ -e dmg/$f ] && continue   # skip demographics
+    [ -e $o ] && continue       # skip existing
+    paste eid.col $f | awk 'NR>1 && $2!="" {print $1}' > $o
+    echo $f $o
+done
+```
+
+
+# Summary
+
+That is all the phenotypes we care about for now. 
+
+```{R, eval=FALSE}
+scn <- function(., w) scan(., w, sep='\t', skip=1, quiet=TRUE, blank.lines.skip=FALSE)
+wtb <- function(., n) write.table(., n, quote=FALSE, sep="\t", row.names=TRUE)
+
+## health outcome dictionary
+dict <- c(aha="allergy", # allergy/hypersensitivity/anaphylaxis
+  alc="alcohol per week", ast="asthma", bck="back problems",
+  bpl="bipolar/major depression", bwl="bowel problems",
+  c43="melanoma and skin", c44="skin cancer", c50="breast cancer",
+  c61="prostate cancer", can="any cancer", cdv="cardiovascular",
+  cnb="maximum frequency of cannabis", d00="In situ neoplasms",
+  dbp="dyastolic blood pressure", dpr="depression",
+  end="endocrine/diabetes", fis="fluid intellegenc score",
+  g_b="gynaecology/breast", gst="gastrointestinal/abdominal",
+  h_a="hayfever/allergic rhinitis", h_m="haematology/dermatology",
+  hcl="hyper-cholestrol", hpt="hypertension", hrt="heart problems",
+  ibn="any illness", icn="count illness",
+  isd="immuno/systemic disorders", jtd="joint disorder",
+  msc="musculoskeletal/trauma", mtm="mean time to memorize",
+  nep="neurology/eye/psychiatry", neu="neurological",
+  nrt="neuroticism", oed="oesophageal disorder", ost="osteoarthritis",
+  pmr="prospective memory", psp="psychological/psychiatric",
+  rsp="respiratory", sbp="systolic blood pressure",
+  smk="pack/year of smoking", thy="thyroid problem")
+
+lst <- unique(sub(".txt$", "", dir("dat/phe", ".txt$")))
+sex <- scn('dat/phe/sex.txt', 0L)
+age <- scn('dat/phe/age.txt', 0L)
+eid <- scn('dat/phe/eid.col', 0L)
+lst <- grep("sex|age", lst, value=TRUE, invert=TRUE)
+
+## mask individuals passed genotype quality control
+iid <- unique(scan('dat/cal/003/kp.iid', 0L))
+msk <- eid %in% iid
+sex <- sex[msk]
+age <- age[msk]
+
+## summerize phenotype
+dat <- lapply(lst, function(phe)
+{
+    print(phe)
+    rsp <- file.path("dat", "phe", paste0(phe, ".txt"))
+    rsp <- scn(rsp, .0)[msk]
+    
+    idx <- which(!is.na(rsp))
+    if(phe %in% c('c50'))           # disease for women
+        idx <- idx[sex == 0]
+    if(phe %in% c('c61'))
+        idx <- idx[sex == 1]        # disease for men
+    
+    N <- length(idx)                    #  non-missing
+    gt0 <- round(sum(rsp[idx] != 0) / N * 100, 1)  # non-zero
+    men <- round(sum(sex[idx] == 1) / N * 100, 1)  # male
+    age.avg <- round(mean(age[idx]), 1)       # age (mu)
+    age.std <- round(sd(age[idx]), 1)          # agd (sd)
+    unq <- unique(rsp[idx])             # unique values
+    if(length(unq) == 2L && min(unq) == 0L && max(unq) == 1)
+        typ <- "binary"
+    else
+        typ <- "numeric"
+    data.frame(row.names=phe, phe=phe, typ=typ, N=N,
+               gt0=gt0, men=men, age.avg=age.avg, age.std=age.std)
+})
+dat <- do.call(rbind, dat)
+wtb(dat, "dat/phe/phe.mat")
+    
+fmt <- format(dat, digits=4, big.mark=',')
+out <- with(fmt,
+{
+    data.frame(
+        name = dict[phe], type = typ,
+        `N( case%,  male%)`= sprintf("%s(%s%%, %s%%)", N, gt0, men),
+        `age(S.D)` = sprintf("%s(%s)", age.avg, age.std),
+        check.names=FALSE)
+})
+
+## name of outcomes
+wtb(out, "dat/phe/phe.fmt")
+```
+
+# Unique identifiers
+
+UKB might assign have assembled different sets of subject id for
+different data applicants, to facilicate collaberation, we use age,
+sex, year of birth, etc, to uniquely mark each individual.
+
+```{sh, eval=FALSE}
+w=$GRP/ukb/dat/phe; cd $w       # working direcotry
+mkdir -p uid
+
+cp eid.col uid/eid.txt # eid
+zcat 001.txt.gz | cut -f3097  > uid/age.txt # 21022, age at recruitment
+zcat 001.txt.gz | cut -f1     > uid/sex.txt # 31,    sex
+zcat 001.txt.gz | cut -f2     > uid/yob.txt # 34,    year of birth
+
+# 40 principle components
+ln -sf $w/gno/pcs.txt uid/pcs.txt  # genome principle component
+```
+Arrange the proposed identifiers into a single R dataset
+```{r, eval=FALSE}
+setwd('/mnt/research/StatGen/ukb/dat/phe')
+eid <- scan("uid/eid.txt", 0L, skip=1)
+age <- scan("uid/age.txt", 0L, skip=1)
+sex <- scan("uid/sex.txt", 0L, skip=1)
+yob <- scan("uid/yob.txt", 0L, skip=1)
+pcs <- read.delim("uid/pcs.txt")
+
+uid <- cbind(eid, age, sex, yob, pcs)
+n1 <- c("EID", "AGE", "SEX", "YOB")
+n2 <- sprintf("P%02d", seq(40))
+names(uid) <- c(n1, n2)
+rownames(uid) <- uid$EID
+saveRDS(uid, "uid.rds")
+```

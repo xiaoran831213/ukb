@@ -1,0 +1,245 @@
+---
+title: "UK Biobank: Relatedness Estimation"
+author: "xiaoran"
+output: html_document
+---
+
+# preparation
+
+
+## Bateched Genotype
+
+Make sure batched genotypes have been ready. In our case, they are
+saved under __{s}/ukb/dat/b?k/{y}__, where {s} is scratch space, {y}
+is the name of a phenotype, and b?k denote the batch size in the
+thousands.
+
+The directory is also linked from within our project as
+__{p}/dat/b?k/{y}__ for convineince.
+
+Batch division by phenotype {y} is necessary because most variables
+have far fewer non-missing values than the total number of samples
+(N=500K), see __{p}/src/div.Rmd__ for greater details.
+
+
+## Undivided Genotype
+
+The undivided genotype is still useful in estimating minor allele
+frequencies used by PLINK's kernel calculation, because MAF estimate
+from a reduced sample (i.e., a batch) is inaccurate and inconsistant
+compared to the full sample. In our case, MAF have been pre-calcuated
+by plink and saved besides the full genotype __{p}/dat/cal/001__ per
+chromosome and surfixed by "frq".
+
+```{sh, eval=TRUE}
+p=$GRP/ukb;
+g=${p}/dat/cal/001     # genotype undivided
+ls $g/*.frq            # list MAF reports
+
+# concatenate
+if [ ! -e $g.frq ]; then
+    head -n 1 $g/01.frq > $g.frq
+    for f in $g/*.frq; do
+        tail -n+2 $f >> $g.frq 
+    done
+fi
+head -n5 $g.frq
+echo "     ..." 
+tail -n5 $g.frq
+```
+
+
+# phenotype specific
+
+As mentioned in __{p}/src/phe.Rmd__ and __{p}/src/div.Rmd__, most
+phenotype has far fewer non-missing entries then the entire sample
+size, thus it is necessary to divide genotype for each phenotype.
+
+The batched genotype has been organized as:
+
+* __{s}/dat/{b}/{y}__, or
+* __{p}/dat/{b}/{y}__,
+
+where the former is located within the scratch space __{s}__ for the
+this project, while the later is a convenient link to it from within
+the project directory __{p}__; in addition, {b} denotes batch size,
+which can be __b2k__, __b3k__, and so on; {y} is the short name of
+phenotype of interest, such as __alc__ for alcohole drinking, smk for
+smoking frequency, and eid for the dummy no-missing phenotype, etc.
+
+Follow up is a list of phenotypes to be analyzed, along with location
+of divided genotype corresponding to each one of them.
+
+## cannibus use
+
+Coded as __cnb__, available in batch sizes 2K and 3K. The genotypeds
+are thus located in:
+
+  * __{s}/ukb/dat/b1k/cnb__, and
+  * __{s}/ukb/dat/b2k/cnb__
+  
+<!-- ## brain volumes -->
+
+<!-- The phenotype is coded as __bvl/{00..26} __, and available batch sizes -->
+<!-- are 1K and 2K, therefore, the batched genotype are in -->
+
+<!--   * __{s}/ukb/dat/b1k/bvl__ -->
+<!--   * __{s}/ukb/dat/b2k/bvl__ -->
+
+
+## alcohol use
+
+This phenotypes is coded as __alc__ under __{p}/dat/phe__, and its
+batched genotype has been parepared under:
+
+  * __{s}/ukb/dat/b2k/alc, and
+  * __{s}/ukb/dat/b3k/alc
+  
+for batch size of 2K and 3K, respectively.
+
+## smoking
+
+It is coded as __smk__ under __{p}/dat/phe__, and the genotype has
+been divided with batch sizef 2K and 3K under these location:
+
+  * __{s}/ukb/dat/b2k/smk, and
+  * __{s}/ukb/dat/b3k/smk
+
+
+## blood pressure
+
+The phenotypes are coded as __sbp__ and __dbp__, standing for systolic
+and diastolic blood pressure, respectively. The divided genotype is
+located in:
+
+  * __{s}/ukb/dat/b2k/sbp, and
+  * __{s}/ukb/dat/b3k/sbp
+  * __{s}/ukb/dat/b2k/dbp, and
+  * __{s}/ukb/dat/b3k/dbp
+
+
+# kernel computation
+
+With divided genotype ready in PLINK BED format, we can calculate then
+cache the basic kernels for each batch.
+
+This accomplished by using PLINK to calculate two most basic kernels:
+
+* standardized linear kernel (LNR) (aka. product kernel)
+* identical by state (IBS) kernel
+
+and use the helper R script __{p}/src/knl.R__ to calculate other kernels
+either based on LNR and IBS, or directly from the batched genotype:
+
+* Laplacian kernel (based on IBS)
+* Exponential kernel (based on LNR)
+* Sigmoid kernel (based on LNR)
+* Gaussian kernel (from genotype data)
+
+```{sh, eval=FALSE}
+p=$GRP/ukb                      # project dir
+w=$p/dat                        # working dir
+g=$p/dat/cal/001                # MAF report
+cd $p
+
+# plink configuration
+cfg="--read-freq ${g##*/}.frq --memory 65536 --threads 4"
+cfg="--read-freq ${g##*/}.frq --memory 65536 --threads 1"
+
+# mix=( dat/bat/{eid,men,wmn,alc,bpl,cnb,dbp,fis,mtm,nrt,pmr,smk,sbp}_{b2k,b3k,b4k,b5k} )
+mix=( dat/bat/{eid,men,wmn,alc,bpl,cnb,dbp,fis,mtm,nrt,pmr,smk,sbp}_{b3k,b4k,b5k} )
+# for s in ${mix[@]}; do
+for s in ${mix[@]}; do
+    for a in $s/*.bed; do  # batches
+        a=${a%%.*}         # no surfix
+        f=${a##*/}         # no prefix
+        [ -e $s/$f.rel.bin ] || echo "time plink --bfile $f --out $f $cfg --make-rel triangle bin4     &>/dev/null"
+        # echo "time plink --bfile $f --out $f $cfg --distance triangle bin4 ibs &>/dev/null"
+        # echo "time Rscript -e 'source(\"knl.R\"); main(\"$f\")'                &>log/$f.log"
+        # echo rm -rf $f.*.bin $f.*.id $f.log
+    done | hpcwp - -d$s -q2 -m16 --wtm 4 -p1 --log None --cp $g.frq --cp src/knl.R --tag ${s#$p/dat/}
+done
+
+for s in ${mix[@]}; do
+    $s/sub.sh
+done
+```
+
+When this done, for each phenotype __{y}__ and batch size __{b}__, a
+series of files should appear as __{p}/dat/{b}/{y}/__, where the
+filename ranges from 000 to the number of batches for a particular
+phenotype representing the data for each batch, and the following
+surfix should be available for each batch:
+
+* bim, fam, and bed, the genotype for that batch;
+* rel: linear kernel
+  - exp: exponential kernel
+  - sgm: sigmoid kernel
+* ibs: ibs kernel
+  - lap: laplacian kernel
+* gsu: Gaussian kernel
+
+For example, the first few batches for cannabis use, of size 2K:
+```{sh, eval=TRUE}
+p=$GRP/ukb; b=b2k; y=cnb
+s=$SCR/ukb
+echo files in scratch space:
+ls -lh $s/dat/$b/$y/ | head -n 22
+echo
+echo links in project space:
+ls -lh $p/dat/$b/$y/ | head -n 22
+```
+
+
+# post processing
+
+## shared batch & kernels
+
+The batch division (see {p}/src/div.Rmd) and calculation of kernels
+(this document) are phenotype specific, that is, the genotype should
+be filtered first so only data points with non-missing value in the
+phenotype of interest will go through division and become kernels.
+
+Some phenotypes however, either have no missing values, such as
+illnesses, or share the same group of non-missing individuals, such as
+imaging data. It is not worthy of dividing and calculating kernel for
+each one of them but just once.
+
+In case of phenotypes of non-missing value, the division and kernel
+calculation is down on a dummy phenotype at __{p}/phe/eid.*__. As for
+brain volumns in __{p}/phe/bvl, a dummny phenotype __{p}/phe/bvl.*__
+is also created for creating the batches and kernels.
+
+Since these divisions and kernels are shared by more than one
+phenotype in analysis, to facilitate future scripting, we use symbolic
+links to maintain the correspondance of one phenotype to one kernel
+set.
+
+```{sh, eval=FALSE}
+p=$GRP/ukb; w=$p/dat; cd $w
+for y in phe/ill/*.txt; do
+    y=${y%%.*}                 # no surfix
+    y=${y##*/}                 # no prefix
+    ln -sf eid_b00 bat/${y}_b00
+    ln -sf eid_b3k bat/${y}_b3k
+    ln -sf eid_b4k bat/${y}_b4k
+    ln -sf eid_b5k bat/${y}_b5k
+done
+
+# general cancer, melanoma and skin, skin, in sutu cancer
+for y in bat/{can,c43,c44,d00}; do
+    ln -sf eid_b00 ${y}_b00
+    ln -sf eid_b3k ${y}_b3k
+    ln -sf eid_b4k ${y}_b4k
+    ln -sf eid_b5k ${y}_b5k
+done
+
+ln -sf men_b00 bat/c61_b00 # prostate++
+ln -sf men_b3k bat/c61_b3k # prostate++
+ln -sf men_b4k bat/c61_b4k # prostate++
+ln -sf men_b5k bat/c61_b5k # prostate++
+ln -sf wmn_b00 bat/c50_b00 # breast+
+ln -sf wmn_b3k bat/c50_b3k # breast+
+ln -sf wmn_b4k bat/c50_b4k # breast+
+ln -sf wmn_b5k bat/c50_b5k # breast+
+```

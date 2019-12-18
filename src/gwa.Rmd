@@ -1,0 +1,249 @@
+---
+title: "UK Biobank: GWAS by Batch"
+author: "xiaoran"
+output: html_document
+---
+
+GWAS is one way to select variants that forms a main kernel.
+
+In this section we perform GWAS for each batch, with respect to some
+pre-select phenotypes and covariants (including the first 10 PCs).
+
+For the purpose of demonstraing real data analysis, we also run GWAS
+for samples excluding one batch, one at a time, in a "leave one out"
+(LOO) manner.
+
+# systolic blood pressure
+
+We would include age, sex and the first few genetic principle components
+as covariate.
+
+## prepare clinical data
+
+```{sh, eval=FALSE}
+p=$GRP/ukb			# project
+w=~/ukb				# working
+s=$w/phe			# phenotype
+d=$w/gwa/sbp			# GWAS
+
+# ID, covariant, and response
+awk <$s/eid 'NR==1 {print "FID"}; NR>1' > $d/fid.id
+awk <$s/eid 'NR==1 {print "IID"}; NR>1' > $d/iid.id
+awk <$s/sex 'NR==1 {print "SEX"}; NR>1 {$1=$1+1; print}' > $d/sex.dem
+awk <$s/age 'NR==1 {print "AGE"}; NR>1'                  > $d/age.dem
+awk <$s/sbp 'NR==1 {print "SBP"}; NR>1'                  > $d/sbp.rsp
+
+# PCs
+printf "p%02d\t" {1..10} | sed 's/\t$/\n/'  >  $d/pcs.cvr
+tail -n+2 $s/pcs | cut -f1-10               >> $d/pcs.cvr
+
+paste $d/*.{id,dem,rsp,cvr} | awk ' \
+    BEGIN {FS="\t";OFS="\t"} \
+    {for(i=1; i<=NF; i++) if($i ~ /^$/) $i=-9}; \
+    1' > $d/phe
+rm $d/*.{id,dem,rsp,cvr}
+```
+
+## GWAS
+
+Since most individuals have non-missing SBP phenotype, we will
+use the whole sample batches.
+
+```{sh, eval=FALSE}
+w=~/ukb				# working
+d=$w/gwa/sbp			# destination
+
+# link to batched genotype of whole samples
+ln -s $w/rel/wkn $d/gno
+
+for b in $d/gno/*.bed; do
+    b=${b%%.*}
+    b=${b##*/}
+    echo plink --bfile gno/$b --no-sex --pheno phe --pheno-name SBP --covar phe --covar-name AGE,SEX,p01-p05 --linear --out $b
+done | hpcwp - -d $d -t1 -q1 -m4 --log none
+```
+
+## extract report
+
+Extract report for SNPs only; 
+```{sh, eval=FALSE}
+w=~/ukb         # working
+d=$w/gwa/sbp    # destination
+for f in $d/*.assoc.*; do
+    awk <$f 'BEGIN{OFS="\t"}; NR==1 || $5=="ADD" {print $1,$2,$3,$4,$6,$7,$8,$9}' > ${f%%.*}.rpt
+done
+rm $d/*.assoc.*
+```
+
+## extra computation
+
+Calcuate linear kernel weighted by GWAS report
+```{sh, eval=FALSE}
+p=$GRP/ukb	# project
+w=~/ukb         # working
+d=$w/gwa/sbp    # destination
+
+for i in $d/*.rpt; do
+    i=${i##*/}
+    i=${i%%.*}
+    echo "Rscript -e 'source(\"gwa.R\"); gwk(\"$i.rpt\", \"gno/$i\", \"$i.gwk\")'"
+done | hpcwp - -d$d -t1 -m48 -q1 --cp $p/src/gwa.R
+```
+
+# smoking
+
+Include age, sex and the first few genetic principle components
+as covariate.
+
+## prepare clinical data
+
+```{sh, eval=FALSE}
+p=$GRP/ukb	# project
+w=~/ukb		# working
+s=$w/phe	# phenotype
+d=$w/gwa/smk    # GWAS
+mkdir -p $d
+
+# ID, covariant, and response
+awk <$s/eid 'NR==1 {print "FID"}; NR>1' > $d/fid.id
+awk <$s/eid 'NR==1 {print "IID"}; NR>1' > $d/iid.id
+awk <$s/sex 'NR==1 {print "SEX"}; NR>1 {$1=$1+1; print}' > $d/sex.dem
+awk <$s/age 'NR==1 {print "AGE"}; NR>1'                  > $d/age.dem
+awk <$s/smk 'NR==1 {print "SMK"}; NR>1'                  > $d/smk.rsp
+
+# PCs
+printf "p%02d\t" {1..10} | sed 's/\t$/\n/'  >  $d/pcs.cvr
+tail -n+2 $s/pcs | cut -f1-10               >> $d/pcs.cvr
+
+paste $d/*.{id,dem,rsp,cvr} | awk ' \
+    BEGIN {FS="\t";OFS="\t"} \
+    {for(i=1; i<=NF; i++) if($i ~ /^$/) $i=-9}; \
+    1' > $d/phe
+rm $d/*.{id,dem,rsp,cvr}
+```
+
+## GWAS
+
+Since most individuals have non-missing SMK phenotype, we will
+use the whole sample batches.
+
+```{sh, eval=FALSE}
+w=~/ukb       # working
+d=$w/gwa/smk  # destination
+
+# link to batched genotype of whole samples
+ln -s $w/rel/wkn $d/gno
+
+for b in $d/gno/*.bed; do
+    b=${b%%.*}
+    b=${b##*/}
+    echo plink --bfile gno/$b --no-sex --pheno phe --pheno-name SMK --covar phe --covar-name AGE,SEX,p01-p05 --linear --out $b
+done | hpcwp - -d $d -t1 -q1 -m4 --log none
+```
+
+## extract report
+
+Extract report for SNPs only; 
+```{sh, eval=FALSE}
+w=~/ukb         # working
+d=$w/gwa/smk    # destination
+for f in $d/*.assoc.*; do
+    awk <$f 'BEGIN{OFS="\t"}; NR==1 || $5=="ADD" {print $1,$2,$3,$4,$6,$7,$8,$9}' > ${f%%.*}.rpt
+done
+rm $d/*.assoc.*
+```
+
+## extra computation
+
+Calcuate linear kernel weighted by GWAS report
+```{sh, eval=FALSE}
+p=$GRP/ukb      # project
+w=~/ukb         # working
+d=$w/gwa/smk    # destination
+
+for i in $d/*.rpt; do
+    i=${i##*/}
+    i=${i%%.*}
+    echo "Rscript -e 'source(\"gwa.R\"); gwk(\"$i.rpt\", \"gno/$i\", \"$i.gwk\")'"
+done | hpcwp - -d$d -t.5 -m48 -q1 --cp $p/src/gwa.R
+```
+
+
+# alcohol
+
+Include age, sex and the first few genetic principle components
+as covariate.
+
+## prepare clinical data
+```{sh, eval=FALSE}
+p=$GRP/ukb      # project
+w=~/ukb         # working
+s=$w/phe        # phenotype
+d=$w/gwa/alc    # GWAS
+mkdir -p $d
+
+# ID, covariant, and response
+awk <$s/eid 'NR==1 {print "FID"}; NR>1' > $d/fid.id
+awk <$s/eid 'NR==1 {print "IID"}; NR>1' > $d/iid.id
+awk <$s/sex 'NR==1 {print "SEX"}; NR>1 {$1=$1+1; print}' > $d/sex.dem
+awk <$s/age 'NR==1 {print "AGE"}; NR>1'                  > $d/age.dem
+awk <$s/alc 'NR==1 {print "ALC"}; NR>1'                  > $d/alc.rsp
+
+# PCs
+printf "p%02d\t" {1..10} | sed 's/\t$/\n/'  >  $d/pcs.cvr
+tail -n+2 $s/pcs | cut -f1-10               >> $d/pcs.cvr
+
+paste $d/*.{id,dem,rsp,cvr} | awk ' \
+    BEGIN {FS="\t";OFS="\t"} \
+    {for(i=1; i<=NF; i++) if($i ~ /^$/) $i=-9}; \
+    1' > $d/phe
+rm $d/*.{id,dem,rsp,cvr}
+```
+
+## GWAS
+
+Since most individuals have non-missing ALC phenotype, we will
+use the whole sample batches.
+
+```{sh, eval=FALSE}
+w=~/ukb       # working
+d=$w/gwa/alc  # destination
+
+# link to batched genotype of whole samples
+ln -s $w/rel/wkn $d/gno
+
+for b in $d/gno/*.bed; do
+    b=${b%%.*}
+    b=${b##*/}
+    echo plink --bfile gno/$b --no-sex --pheno phe --pheno-name ALC --covar phe --covar-name AGE,SEX,p01-p05 --linear --out $b
+done | hpcwp - -d $d -t1 -q1 -m4 --log none
+```
+
+## extract report
+
+Extract report for SNPs only; 
+
+```{sh, eval=FALSE}
+w=~/ukb         # working
+d=$w/gwa/alc    # destination
+for f in $d/*.assoc.*; do
+    echo $d
+    awk <$f 'BEGIN{OFS="\t"}; NR==1 || $5=="ADD" {print $1,$2,$3,$4,$6,$7,$8,$9}' > ${f%%.*}.rpt
+done
+rm $d/*.assoc.*
+```
+
+## extra computation
+
+Calcuate linear kernel weighted by GWAS report
+```{sh, eval=FALSE}
+p=$GRP/ukb	# project
+w=~/ukb         # working
+d=$w/gwa/alc    # destination
+
+for i in $d/*.rpt; do
+    i=${i##*/}
+    i=${i%%.*}
+    echo "Rscript -e 'source(\"gwa.R\"); gwk(\"$i.rpt\", \"gno/$i\", \"$i.gwk\")'"
+done | hpcwp - -d$d -t.5 -m48 -q1 --cp $p/src/gwa.R
+```

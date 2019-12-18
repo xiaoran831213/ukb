@@ -1,0 +1,98 @@
+---
+title: "UK Biobank Simulation"
+author: "xiaoran"
+output: html_document
+---
+
+# process imputed genotype
+
+##  randomly select chunks of imputated genotype data.
+
+```{sh, eval=FALSE}
+p=$GRP/ukb;			# project directory
+w=$SCR/ukb/sim/wgs;		# working directory
+g=$SCR/ukb/dwn/wgs
+e=xiaoran.tong.cn@gmail.com	# email
+
+# divide the samples into chunks of roughly 20K
+s=$g/imp/030
+d=$w/imp/000; mkdir -p $d
+
+# number of variants per chromosome
+L=($(for f in $s/*.bim; do cat $f | wc -l; done))
+
+for i in $(seq 0 1999); do
+    # select chromome
+    c=$(printf %02d $[$RANDOM % 22 + 1])
+    o=$(printf %04d $i)
+
+    # number of variants
+    ngv=${L[$i]}
+
+    # from-snp
+    gv1=$[$RANDOM % $[ngv - 20480] + 1]
+    echo "cut -f2 $s/$c.bim | head -n-$gv1 | tail -n 20480 > $d/$o.vid"
+    
+    # subjects
+    echo "cut -f1,2 $s/$c.fam | sort -r | head -n 10240 | sort > $d/$o.sid"
+
+    # extraction
+    # echo $i $c $o
+    echo "plink2 --bfile $s/$c --extract $o.vid --keep $o.sid --make-bed --out $o"
+    echo "rm $o.vid $o.sid"
+done | hpcwp - -d$d -q40 -t4 -m4 --ln $s --log none --jsc SLURM --email $e
+
+# make sure the MAF of each chunk is greater than 0.05.
+p=$GRP/ukb;			# project directory
+w=$SCR/ukb/sim/wgs;		# working directory
+e=xiaoran.tong.cn@gmail.com	# email
+s=$w/imp/000
+d=$w/imp/001
+for f in $s/*.bed; do
+    o=${f##*/}
+    o=${o%%.*}
+    echo "plink2 --bfile ${f%%.*} --maf 0.05 --make-bed --out $o"
+done | hpcwp - -d$d -q40 -t4 -m4 --ln $s --log none --jsc SLURM --email $e
+```
+
+## Covert to R dataset
+
+make sure the R package __"BEDMatrix"__ is installed.
+
+```{sh, eval=FALSE}
+p=$GRP/ukb;			# project directory
+w=$SCR/ukb/sim/wgs;		# working directory
+e=xiaoran.tong.cn@gmail.com	# email
+s=$w/imp/001
+d=$w/imp/002
+for f in $s/*.bed; do
+    f=${f%%.*}
+    o=${f##*/}
+    echo "Rscript -e 'source(\"bed2gmx.R\"); . <- gmx(\"$f\", sav=NA)$gmx; saveRDS(.\$gmx, \"$o.rds\")'"
+done | hpcwp - -d$d -q20 -t4 -m8 --ln $s --cp bed2gmx.R --log none --jsc SLURM --email $e
+
+# copy the RDS into the group directory.
+mkdir -p dat/sim;
+cp $d/*.rds dat/sim
+```
+
+# Whole Genome Simulation
+
+After dividing the samples into batches of 2K to 8K individuals, and their relatedness
+kernel calculated (see __rel.Rmd__ for details), it is possible to simulate phenotypes
+with the entiety of called SNPs.
+
+We can generate phenotype of desired distribution by batch, with managable computation
+load.
+
+## select casual SNPs
+
+Starts with cancatenated genome under __{WD}/rel__, where {WD} is the working
+directory for relatedness computation (see __rel.Rmd__).
+
+```{sh, eval=FALSE}
+p=$GRP/ukb
+w=~/ukb
+s=$w/rel
+d=$w/sim/whl
+```

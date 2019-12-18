@@ -1,0 +1,215 @@
+---
+title: "UK Biobank Called Genotype"
+author: "xiaoran"
+output: html_document
+---
+
+# Preperation
+
+Make sure the main phenotype has been downloaded from UKB (see
+__dwn.Rmd__), and variables describing the process and quality
+control of genotyping have been extracted (see __"phe.Rmd"__).
+
+Make sure the genotype is download from UKB or accessable from our
+institution (i.e., MSU), and links have been created from within the
+project directory (denoted by {p}).
+
+The link to the downloaded genotype have been created in
+__{p}/dat/cal/000__.
+
+Notation: __{p}__ refers to the root directory of project based on UK
+Bio-bank data.
+
+We use scripts to check the links:
+```{sh, eval=TRUE}
+p=$GRP/ukb; cd $p				# project directory
+ls -lh -T10 dat/cal/000 | cut -f8
+```
+
+# Quality Control
+
+## 1.variants
+
+Remove low quality SNPs, with following rejection criteria:
+
+  * SNP only
+  * MAF < 0.001
+  * SNP-wise missing < 2%
+  * p value of HWE test < 1e-6
+
+When done, we also calcuate the allele frequency, which is more
+accurate before any individual be removed due to subsequent QC.
+
+UKB is an oversized cohort, an MAF cut-off of 0.001 should not
+hinder statistcial power, which is much lower than most studies
+which choice between 0.01 to 0.05.
+
+```{sh, eval=FALSE}
+p=$GRP/ukb;        cd $p        # project directory
+w=dat/cal;         cd $w        # working directory
+s=000                           # downloads (links)
+d=001                           # result of basic variant QC
+
+# autosomes (a few minutes)
+aut=({01..22} {25..26})
+for c in ${aut[@]}; do
+    i=$s/$c
+    o=$d/$c
+    plink --bfile $i --hwe 1e-6 --geno .02 --maf 1e-3 --snps-only --make-bed --out $o
+done
+# X chromosome, apply hwe on females only
+i=$s/23                         # X chromosome
+o=$d/23
+awk <$i.fam '$5==2' >fm         # females
+plink --bfile $i --keep fm --hwe 1e-6 --make-just-bim --out qc1
+plink --bfile $i --extract qc1.bim --geno 0.02 --maf 1e-3 --snps-only --make-bed --out $o
+# Y chromosome, apply hwe on male only
+i=$s/24                         # Y chromosome
+o=$d/24
+awk <$i.fam '$5==1' >ml         # males
+plink --bfile $i --keep ml --hwe 1e-6 --make-just-bim --out qc1
+plink --bfile $i --extract qc1.bim --geno 0.02 --maf 1e-3 --snps-only --make-bed --out $o
+
+# calculate allele frequency (a few minutes)
+for c in $d/*.bed; do o=${c%.*}; plink --bfile $o --freq --out $o; done
+# merge into one table
+head -n 1 $d/01.frq                       > $d.frq
+for f in $d/*.frq; do tail -n+2 $f; done >> $d.frq
+
+# clean up
+rm -rf fm ml qc1.* $d/*.{nosex,log}
+```
+
+It is necessary to estimate allele frequency here with the entire
+avaiable sample pool, before any upcomming quality control that may
+remove some samples.
+
+Do the same for MSU data under **{p}/dat/cal/100** and send result to
+to **{p}/dat/cal/101**.
+
+
+## 2.samples
+
+Remove pooly typed individuals with missing rate higher than 2% on any
+autosome.
+
+```{sh, eval=FALSE}
+p=$GRP/ukb                      # project directory
+w=$GRP/ukb/dat/cal              # working directory
+s=$w/001                        # after sample QC
+d=$w/002                        # well-typed individuals
+
+# qualified individuals with respect to each chromosome
+mkdir -p $d
+for c in $s/*.bed; do
+    c=${c%%.*}
+    i=${c##*/}
+    plink --bfile $c --mind 0.02 --make-just-fam --out $d/$i
+done # | hpcwp - -d$d -q2 --wtm 2 -m8 --log None
+
+# count the time an individual passes QC on autosomes
+cat $d/{01..22}.fam | sort | uniq -c > $d/ct.fam
+
+# collect individuals qulified on all autosomes
+awk <$d/ct.fam '$1==22 {print $2,$3}' > $d/kp.iid
+
+for c in $s/*.bed; do
+    c=${c%%.*}
+    i=${c##*/}
+    plink --bfile $c --keep $d/kp.iid --make-bed --out $d/$i
+done
+```
+Collect qualified individuals.
+
+## 3.merge
+
+When both variant-wise and smaple-wise QC is done, merge the result
+into one genome.
+
+```{sh, eval=FALSE}
+p=$GRP/ukb; cd $p               # project dir - UKB related works
+w=dat/cal;  cd $w               # working dir - GWAS wide genotype
+s=002                           # post variant and sample QC
+
+# list and merge chromosomes (severial minutes)
+for f in $s/*.bed; do echo ${f%.*}; done > $s.lst
+plink --merge-list $s.lst --make-bed --out $s
+```
+
+Merging PLINK BED can be a headache if --snp-only was not used in the
+previous QC step. Issues also arise when duplicated variant ID exists,
+fortunately, UKB's genotype has no such issue, and the dbSNP version
+adopted by UKB is fairly recent, with most duplications corrected.
+
+If the merging is a success, fileset __002.*__ should appear under the
+present working directory **{p}/dat/cal **.
+
+# Sample Selection
+
+(note: only after phenotype processing)
+
+We plan to use a subset of sample for later analysis:
+
+  * unrelateded ones only, indicated by two masks stored as phenotypes
+  under __"{p}/dat/phe"__. See section __"mark unrelatedness"__ in
+  __"phe.Rmd"__ for details. For now we keep those covered by the first
+  mask __"gno_ur1.txt"__.
+
+  * exclude genotype outliers according to UKB variable __22027:
+  Outliers for heterozygosity or missing rate__, saved under the same
+  phenotype directory as __"gno_out.txt"__.
+
+  * retain samples of European ancestry marked by __"eur.txt"__ inside
+  the same phenotype direcotry.
+
+Start from post QC genotype stored in __"{p}/dat/cal/001"__, and save
+the selected samples to __002__. Use the following script:
+
+```{sh, eval=FALSE}
+p=$GRP/ukb						# project dir
+s=$p/dat/cal/001				# called SNP, post QC
+d=$p/dat/cal/002				# called SNP, selected samples
+mkdir -p $d
+
+# individuals: unrelated, no genotyping outliar, European ancestry only.
+paste $p/dat/phe/{eid.col,{dmg/eur,gno/{ur1,out}}.txt} > /tmp/idv
+awk < /tmp/idv -v FS=$'\t' 'NR>1 && $2>0 && $3==1 && $4>0 {print $1,$1}' > $d/kpp
+
+# qualified individuals
+for c in $s/*.bed; do
+    c=${c%%.*}
+    f=${c##*/}
+    echo "plink2 --bfile $c --keep kpp --make-bed --out $f"
+done | hpcwp - -d$d -q1 -t.5 -m4 --log None
+```
+As a result, we selected 379,573 samples from a total of 488,377.
+
+The rest of the sample are not unrelated, but we still wnat to
+extract them which, though much smaller than unrelated one, can
+be used act as holdout data for model evaluation, while the main
+group participating in model development. 
+
+Also, save the 2nd unrelated group as __{p}/dat/cal/008__:
+
+```{sh, eval=FALSE}
+p=$GRP/ukb		# project dir
+s=$p/dat/cal/001	# called GNO, post QC
+d=$p/dat/cal/008	# called GNO, selected samples
+mkdir -p $d
+
+# possibily related ones, no outliar, only European ancestry.
+paste $p/dat/phe/{eid.col,{dmg/eur,gno/{ur1,out}}.txt} > /tmp/idv
+awk < /tmp/idv -v FS=$'\t' 'NR>1 && $2>0 && $3!=1 && $4>0 {print $1,$1}' \
+    > $d/kpp
+
+# qualified individuals
+for c in $s/*.bed; do
+    c=${c%%.*}
+    f=${c##*/}
+    echo "plink --bfile $c --keep kpp --make-bed --out $f"
+done | hpcwp - -d$d -q1 -t.5 -m4 --log None
+```
+As a result, 79,677 out of 488,377 individuals were selected.
+
+The removal of related individuals is not yet done for MSU's
+data, because we have to find the kinship table first.

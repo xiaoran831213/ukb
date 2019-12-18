@@ -1,0 +1,450 @@
+---
+title: "UK Biobank Download"
+author: "xiaoran"
+output:
+  html_document:
+    toc: TRUE
+---
+
+# preparation
+
+Login UKB, goto showcase --> downloads, fetch all the tools.
+and list them on the OS search path:
+
+  * ukbmd5
+  * ukbunpack
+  * ukbconv
+  * ukbfetch
+  * ukbgene
+
+Also download the encoding dictionary (optional), save it to the
+project data directory __"{p}/dat"__:
+  
+  * encoding.ukb
+
+```{sh, eval=FALSE}
+p=$GRP/ukb;      mkdir -p $p	# project directory
+w=$SCR/ukb/dwn;  mkdir -p $w	# working directory
+
+# get utilities
+u=~/app/ukb/bin; mkdir -p $u	# utilities
+
+cd $u
+wget -nd biobank.ndph.ox.ac.uk/showcase/util/ukbmd5
+wget -nd biobank.ndph.ox.ac.uk/showcase/util/ukbunpack
+wget -nd biobank.ndph.ox.ac.uk/showcase/util/ukbconv
+wget -nd biobank.ndph.ox.ac.uk/showcase/util/ukbfetch
+wget -nd biobank.ndph.ox.ac.uk/showcase/util/ukbgene
+
+
+# get code book
+cd $p/dat
+wget -nd biobank.ndph.ox.ac.uk/showcase/util/encoding.ukb
+cd $p
+```
+
+# deploy main data
+
+By the instructions in the emails, download the encrypted data and
+the decryption key, into the working directory.
+
+When done, __ukb23162.enc__ and  __k40967.key__ should be there;
+next, match the MD5 with those in the email.
+
+```{sh, eval=FALSE}
+p=$GRP/ukb                       # project directory
+w=$SCR/ukb/dwn			 # working directory
+ln -s $p/dat/ukb23162.enc $w/enc # encrypted data
+ln -s $p/dat/k40967.key   $w/key # key
+ln -s $p/dat/encoding.ukb $w/    # code book
+cd $w
+ukbmd5 enc			# must match with the email!
+```
+The MD5 must be __"81939bce935ce152b2d71e3d4c3df876"__.
+
+
+# decryption
+
+```{sh, eval=FALSE}
+w=$SCR/ukb/dwn; cd $w		# working directory
+ukbunpack enc key
+```
+when done, **enc_ukb** should appear, with an MD5 code:
+__d2fd88a956f81b19a0ff652fe0adb1e5__.
+
+
+# convertion
+
+## a) to R dataset
+
+First we run the convertion tool, also make sure __encoding.ukb__ is
+present to help recoding the data.
+
+__note:__ do not rename the codebook __encoding.ukb__, since UKB's
+tools is somewhat hardcoded to recognized this file.
+
+```{sh, eval=FALSE}
+w=$SCR/ukb/dwn; cd $w	# working directory
+ukbconv enc_ukb R	# convert to R
+```
+the tab delimited file **enc_ukb.out.tab*, and a R script
+**enc_ukb.out.r** should appear.
+
+Now, start up R console and run that r script:
+```{R, eval=FALSE}
+setwd('/mnt/gs18/scratch/users/tongxia1/ukb/dwn')
+source('enc_ukb.out.r')
+saveRDS(bd, 'enc_ukb.out.rds')
+```
+the R dataset __enc_ukb.out.rds__ should appear.
+
+
+## b) to dictionary
+
+make sure the code book __encoding.ukb__ is present so the dictionary
+will include a section of variable's encoding.
+
+```{sh, eval=FALSE}
+w=$SCR/ukb/dwn; cd $w # working directory
+ukbconv enc_ukb docs  # data dictionary
+ukbconv enc_ukb bulk  # bulk variables
+```
+**enc_ukb.out.html** and **enc_ukb.out.bulk** should appear; for future
+convenience, save the bulk data list as RDS as well.
+
+```{R, eval=FALSE}
+setwd('/mnt/scratch/tongxia1/ukb/dwn')
+bulk <- read.table("enc_ukb.out.bulk", col.names=c('e', 'd'), as.is=TRUE)
+saveRDS(bulk, "ukb23162.bulk.rds")
+  ```
+
+## c) texture data
+
+```{sh, eval=FALSE}
+w=$SCR/ukb/dwn; cd $w          # working directory
+ukbconv enc_ukb txt            # tab delimited clinical data
+```
+**enc_ukb.out.txt** should appear.
+
+
+## MSU data
+
+Another group in MSU group has download a different set of
+phenotypes and convered them into R data.fram , we have made
+a copy under the project directory, by the full name of
+"{p}/dat/phe/msu.rds".
+
+
+# Called Genotype (SNPs)
+
+Make sure the tool **"ukbgene"** is executable, which is essential to
+fetching various types of genomic data. The called SNPs is of type
+"cal", which come in PLINK binary triplets (#chrmosome.{bed,fam,bim).
+
+## Download From UKB
+
+```{sh, eval=FALSE}
+p=$GRP/ukb
+d=$SCR/ukb/dwn/gno/cal; mkdir -p $d  # SNP call
+ln -sf $p/dat/k40967.key $d/key	     # key
+
+cd $d
+# plink BIM and MD5 checksum for genotype files
+bim=biobank.ndph.ox.ac.uk/showcase/showcase/auxdata/ukb_snp_bim.tar
+md5=biobank.ndph.ox.ac.uk/showcase/showcase/docs/md5_genotype.txt
+wget -nd -qO- $bim > bim.tar; tar -xvf bim.tar
+wget -nd $md5
+cd $p
+
+# plink BED, use hpcc for downloading
+chr=( {1..22} {X,Y,XY,MT} )
+for c in ${chr[@]};
+do 
+    [ -e $d/*_chr${c}_*.bed ] || echo "ukbgene cal -akey -c$c"
+    [ -e $d/*_chr${c}_*.fam ] || echo "ukbgene cal -akey -c$c -m"
+done | hpcwp - -d$d -q12 -m4 -t4
+
+# MD5 check must return OK for all!
+cd $d
+md5sum -c <(grep "bed$" md5_genotype.txt) # BED(s)
+md5sum -c <(grep "bim$" md5_genotype.txt) # BIM(s)
+cd $p
+```
+
+## Links to Downloads
+
+It would be better to create links within the project
+directory to downloaded genotype.
+
+```{sh, eval=FALSE}
+p=$GRP/ukb
+s=$SCR/ukb/dwn/gno/cal	        # Downloads
+d=$p/dat/cal/000; mkdir -p $d   # the links
+
+for f in $s/*.{bed,bim,fam}; do
+    e=${f#*.}			# suffix
+    c=${f#*chr}			# chromosome
+    c=${c%%_*}
+
+    if   [[ $c = "X"  ]];      then c=23
+    elif [[ $c = "Y"  ]];      then c=24
+    elif [[ $c = "XY" ]];      then c=25
+    elif [[ $c = "MT" ]];      then c=26
+    else c=$(printf %02d $c)
+    fi
+    echo $c $e $f
+    ln -sf $f $d/$c.$e
+done
+```
+
+## Link to MSU Source
+
+MSU already have called genotype, creat symbolic links to it.
+__note:__ MSU download is only accessible via **qlu@msu.edu**.
+
+__be very cautious:__ the __"fam"__ file (sample and family index)
+is outdated, such that sample IDs in this old file dose not match
+at all with __eid__ in the new phenotype data we just acquired.
+
+As a result we can only associate MSU genotype with MSU phenotype,
+not our own downloads.
+
+__note:__ only one __"fam"__ file for chromosome 1 exists for
+download, other chromosomes can share this file.
+
+```{sh, eval=FALSE}
+p=$GRP/ukb			# project
+s=$UKB/source/genotypes/calls	# downloads (msu)
+d=$p/dat/cal/100; mkdir -p $d	# shortcuts
+
+for f in $s/{bed,bim}/*; do
+    e=${f%/*/*}; e=${f%/*}; e=${e##*/}
+    c=${f#*chr}; c=${c%%_*}
+    if [[ $c =~ ^[0-9]+$ ]]; then c=$(printf %02d $c)
+    elif [[ $c = "X" ]];     then c=23
+    elif [[ $c = "Y" ]];     then c=24
+    elif [[ $c = "XY" ]];    then c=25
+    elif [[ $c = "MT" ]];    then c=26
+    fi
+    # echo $c $e $f
+    ln -sf $f $d/$c.$e
+done
+
+fam=$(ls -1 $s/fam/*.fam)
+for f in $d/*.bed; do
+    l=${f%%.*}.fam
+    # echo $fam $l
+    ln -sf $fam $l
+done
+```
+
+# Imputed Genotype
+
+Roughly 3TB of space is required, therefore we will download
+it to scratch space instead of research or home space.
+
+## Download from UKB
+
+the type name is "imp", came in BGEN format.
+```{sh, eval=FALSE}
+p=$GRP/ukb
+w=$SCR/ukb/dwn/gno
+d=$w/imp; mkdir -p $d		# working directory
+ln -fs $p/dat/k40967.key $d/key	# UKB key
+
+cd $d
+# BGEN indices (UKB Resource 1965)
+wget  -nd  biobank.ndph.ox.ac.uk/showcase/showcase/auxdata/ukb_imp_bgi.tgz
+tar -xf ukb_imp_bgi.tgz
+md5sum -c ukb_bgi.md5
+
+# BGEN MAF and information score (UKB Resource 1967)
+wget  -nd  biobank.ndph.ox.ac.uk/showcase/showcase/auxdata/ukb_imp_mfi.tgz
+tar -xf ukb_imp_mfi.tgz
+md5sum -c ukb_mfi.md5
+wc -l ukb_mfi_chr*.txt
+#     45906 XY
+#   3917799 X
+#  97059328 total
+
+# MD5
+wget  -nd  biobank.ndph.ox.ac.uk/showcase/showcase/docs/md5_imputed.txt
+
+cd $p
+# BGEN main data, we have to use hpcc for downloading
+chr=( {1..22} {X,XY} )
+cdx=( {1..22} {23,25} )
+for i in {0..23}; do
+    c=${chr[$i]}
+    i=${cdx[$i]}
+    [ -e $d/*_chr${c}_*.bgen  ] || echo "ukbgene imp -akey -c$i"
+    [ -e $d/*chr${c}_*.sample ] || echo "ukbgene imp -akey -c$i -m"
+done | hpcwp - -d $d -q1 -m4 -t2
+# $d/sub.sh   # <- submit the downloads!
+
+# MD5 check must return OK for all!
+cd $d
+# MD5 checksum (UKB Resource 977)
+wget  -nd  biobank.ndph.ox.ac.uk/showcase/docs/md5_imputed.txt
+ls -1 *.bgen | grep -f - md5_imputed.txt | md5sum -c - # BGIN(s)
+ls -1 *.bgi  | grep -f - md5_imputed.txt | md5sum -c - # BGI (s)
+ls -1 *_mfi* | grep -f - md5_imputed.txt | md5sum -c - # MFI (s)
+
+# sample files does not have pre-calculated md5, but they should
+# have the same checksum except the X chromosome
+md5sum *.sample
+cd $p
+```
+
+## Link to Downloads
+
+Create symbolic links the imputed genotype just downloaded, which
+use shorter and unified names. 
+
+```{sh, eval=FALSE}
+w=$SCR/ukb/
+s=$w/dwn/gno/imp		# downloads
+d=$w/imp/000; mkdir -p $d	# links
+for f in $s/*chr*.{bgen,bgi,txt,sample}; do
+    e=${f#*.}
+    c=${f#*chr}
+    c=${c%%_*}
+    if [[ $c =~ ^[0-9]+$ ]]; then c=$(printf %02d $c)
+    elif [[ $c = "X" ]];     then c=23
+    elif [[ $c = "Y" ]];     then c=24
+    elif [[ $c = "XY" ]];    then c=25
+    elif [[ $c = "MT" ]];    then c=26
+    fi
+    if [[ $e = "txt" && $f =~ "mfi" ]]; then
+	e=mfi
+    fi
+    echo $c $e $f
+    ln -sf $f $d/$c.$e
+done
+```
+
+## link to MSU Source
+MSU again has the imputed genotype as well, just create symbolic
+links to them.
+
+__note:__ MSU download is only accessible via **qlu@msu.edu**.
+
+```{sh, eval=FALSE}
+# shortcuts for our downloads
+p=$GRP/ukb			# project
+w=$SCR/ukb			# working
+s=$UKB/source/genotypes/imputed # MSU data
+d=$w/imp/000; mkdir -p $d	# imputated
+cd $d
+for f in $s/{bgen,bgi,mfi,sample}/*; do
+e=${f%/*/*}; e=${f%/*}; e=${e##*/}
+c=${f#*chr}; c=${c%%_*}
+if [[ $c =~ ^[0-9]+$ ]]; then c=$(printf %02d $c)
+elif [[ $c = "X" ]];     then c=23
+elif [[ $c = "Y" ]];     then c=24
+elif [[ $c = "XY" ]];    then c=25
+elif [[ $c = "MT" ]];    then c=26
+fi
+echo $c $e $f
+ln -sf $f $d/$c.$e
+done
+```
+
+# Relatedness
+
+UKB calculated the relateness in terms of __HetHet__, __IBS0__,
+and __Kinship__, for individuals fell into un-reported kinships
+identified by the genotype.
+
+## Download from UKB:
+```{sh, eval=FALSE}
+p=$GRP/ukb                   # project
+w=$SCR/ukb/dwn               # working
+d=$p/dat; mkdir -p $d        # put relatdness here
+cd $w			     # download now
+ukbgene rel -akey
+cp ukb*.dat $p/dat/rel.txt   # copy to project dir
+```
+UKB only consider the first degree relatedness as "kins", so the
+calculation was only done for a small fraction of 100K pairs out
+of nearly $50,000^2$. Since it is rather small in size, the data
+can be saved under project home, which is named __"rel.txt"__.
+
+* ID for participant 1 in related pair;
+* ID for participant 2 in related pair;
+* HetHet: fraction of markers for which the pair both have a
+heterozygous genotype;
+* IBS0: fraction of markers for which the pair shares zero
+alleles;
+* kinship coefficient for this pair based on the set of markers
+used in the kinship inference;
+
+## Self Estimate
+A comprehensive evaluation for all sample pairs is computationally
+impractical. 
+
+To estimate all relatedness for a subset of reasonabl size (i.e.,
+for a batched training), one can turn to __PLINK__, or the more
+specialized __King Software__. See the details in __"rel.Rmd"__.
+
+# Bulk Data
+make sure the list of bulk data has been converted from the main
+data sheet.
+
+## szie estimation
+download the first 10 instance of every possible bulk data field.
+make 10 batch list here:
+
+```{R, eval=FALSE}
+setwd('/mnt/scratch/tongxia1/ukb/dwn')
+bulk <- readRDS('ukb23162.bulk.rds')
+## first 10 instance of each bulk fields
+fs10 <- by(bulk, bulk$d, function(x) x[1:10, ])
+
+## split into 10 bulk lists
+bat <- do.call(rbind, lapply(fs10, cbind, i=1L:10L))
+dir.create('tmp/bks', FALSE, TRUE)
+for(j in seq(10))
+{
+   f <- sprintf('tmp/bks/%02d', j)
+   b <- subset(bat, j==i, -i)
+   write.table(b, f, col.names=FALSE, row.names=FALSE, quote=FALSE)
+}
+```
+
+use 10 processes to download the data
+```{sh, eval=FALSE}
+w=$SCR/ukb/dwn; cd $w        # working
+d=$w/tmp
+for b in $d/bks/*; do
+    b=${b##*/}
+    echo "ukbfetch -v -akey -bbks/$b -o$b"
+done | hpcwp - -d$d -q2 -t4 -m4 --log none
+ln -s $w/k40967.key $d/key
+```
+summarize data size
+```{R, eval=FALSE}
+library(dplyr)
+setwd('/mnt/scratch/tongxia1/ukb/dwn')
+
+## calculate mean field sizes from the 10 samples
+files <- dir('tmp', '^[0-9]*_[0-9]*_._.', full=TRUE)
+sizes <- file.size(files) / 1024^2      # size in MB
+e <- sub('_.*$', '', basename(files))
+d <- sub('^[0-9]*_([0-9]*_[0-9]_[0-9]).*', '\\1', basename(files))
+ref <- tibble(e=e, d=d, s=sizes)
+ssz <- ref %>% group_by(d) %>% summarize(mu=mean(s), sd=sd(s)) %>% ungroup
+
+## estimate the total size
+blk <- as_tibble(readRDS('ukb23162.bulk.rds'))
+cnt <- blk %>% group_by(d) %>% summarize(n=n()) %>% ungroup
+with(inner_join(cnt, ssz), sum(n * mu)) / 1024^2
+```
+
+An estimated total of 67.124 TB is require to store the requrest bulk data,
+not including genetic data.
+
+## download
+
+The actual downloading happens after purchasing large storage device, which
+is done by another colleague.

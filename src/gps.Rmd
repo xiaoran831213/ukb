@@ -1,0 +1,125 @@
+---
+title: "genome-wide polygenic score (GPS)"
+author: "xiaoran"
+output: "html_document"
+---
+
+# Introduction
+
+This document describe the calculation of GPS for a phenotypes. In
+particular, take CAD (coronary artery disease) among participants of 
+UK Biobank (UKB) for an demostration.
+
+# Prerequisit
+
+To calculate and report GPS, the following items are required:
+
+   * a GWAS report on phenotypes not necessarily the same but related
+     to the target (i.e, CAD), based on an European population (since
+     the target is fro UKB);
+   * an independent genotype to draw an LD (linkage Disequilibrium)
+   map required to re-score SNPs in the GWAS report;
+   * a target genotype to predict genetic risk,
+     - a validation set to select hyper-paramter $\ruo$ -- fraction of
+       casual variants;
+     - a testing set to assess prediction performance.
+   * software tools
+     - LDPred (https://github.com/bvilhjal/ldpred), to create LD map,
+       reweight SNP, and calculate genetic risk;
+     - PLINK v1.9 and v2.0;
+     - Linux shell (or R, python), to manipulate text based reports.
+   
+# GWAS report
+
+For a phenotype (i.e., CAD), search GWAS report online with the full
+name (coronary artery disease). Possible sources are
+  
+  * NHGRI-EBI GWAS Catalog (https://www.ebi.ac.uk/gwas);
+  * GWAS Central (https://www.gwascentral.org/index);
+  * GWAS ATLAS (https://atlas.ctglab.nl);
+  * https://ctg.cncr.nl/software/summary_statistics
+  * Or, via communication with study groups.
+
+Taking the published work ... as an guidence, search 5 publications in
+GWAS Catalog and download their GWAS report
+
+  * Bivariate Genome-Wide Association Scan Identifies 6 Novel Loci
+    Associated With Lipid Levels and Coronary Artery Disease.
+    - 735,838 European, NR
+    - ACCESS: https://www.ebi.ac.uk/gwas/studies/GCST007544
+    - PubMed: https://www.ncbi.nlm.nih.gov/pubmed/?term=30525989
+    - Report: ftp://ftp.ebi.ac.uk/pub/databases/gwas/summary_statistics/SiewertKM_30525989_GCST007544
+    - CADTC_bivarstats_full.txt
+
+  * A comprehensive 1,000 Genomes-based genome-wide association
+    meta-analysis of coronary artery disease;
+    - N = 184,305
+       * 141,217 European
+       *   3,139 African American or Afro-Caribbean
+       *   4,095 Hispanic or Latin American
+       *  25,557 South Asian
+       *   2,268 Greater Middle Eastern (Middle Eastern, North African or Persian)
+       *  11,323 East Asian
+    - ACCESS: https://www.ebi.ac.uk/gwas/studies/GCST003116
+    - PubMed: https://www.ncbi.nlm.nih.gov/pubmed/?term=26343387
+    - Report: ftp://ftp.ebi.ac.uk/pub/databases/gwas/summary_statistics/NikpayM_26343387_GCST003116
+      
+
+The GWAS report is temporarily saved as __{p}/dat/gps/cad/dwn__ by the
+name __"CADTC_bivarstats_full.txt"__, where {p} denotes project
+directory.
+
+## Expected Format
+From the GWAS report, one should take out and arrange the essential
+parts acceptible by LDPred softward:
+
+  * CHR     : chromosome
+  * POS     : SNP position
+  * SNP_ID  : SNP ID, dose not have to be an "rs" ID.
+  * REF     : reference allele
+  * ALT     : alternative allele
+  * REF_FRQ : allele frequency of reference allele
+  * PVAL    : p-value
+  * BETA    : effect of reference allele
+  * SE      : standard error
+  * N       : sample size when estimating BETA.
+
+Presumably BETA is the effect of each reference allele, counted betwen
+0, 1, and 2.
+
+## CAD Example
+
+First exam columns in the GWAS report, by printing out the headers.
+```{sh, eval=FALSe}
+p=$GRP/ukb
+w=$p/dat/gps/cad; cd $w
+head -n 1 gwa.tsv | tr '\t' '\n' | awk 'FS="\t" {print NR"\t"$1}'
+```
+The following columns are to be taken out:
+  
+  *  8  DISEASE/TRAIT
+  *  9  INITIAL SAMPLE SIZE
+  * 10  REPLICATION SAMPLE SIZE
+  * 12  CHR_ID
+  * 13  CHR_POS
+  * 21  STRONGEST SNP-RISK ALLELE
+  * 22  SNPS
+  * 24  SNP_ID_CURRENT
+  * 27	RISK ALLELE FREQUENCY
+  * 28  P-VALUE
+  * 29  PVALUE_MLOG
+  * 30  P-VALUE (TEXT)
+  * 31  OR or BETA
+  
+```{sh, eval=FALSE}
+p=$GRP/ukb
+w=$p/dat/gps/cad; cd $w
+cut -f8,9,10,12,13,21,22,24,27-31 gwa.tsv > /tmp/ex1.txt
+```
+
+## 1000 genome data
+
+The 1KG project data is the base of LD (linkage Disequilibrium) map
+required to re-weight SNPs in a GWAS report.
+
+For now we take out 503 sample genotypes of European origin.
