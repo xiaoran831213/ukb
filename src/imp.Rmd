@@ -7,8 +7,9 @@ output: html_document
 # preperation
 
 Make sure  the main phenotype has  been downloaded from UKB  (see [dwn.Rmd][] or
-[dwn.html][]),  and variables  describing  the process  and  quality control  of
-genotyping have been extracted (see __"phe.Rmd"__).
+[dwn.html][]),  and  variables  that   describe  genotyping  quality  have  been
+extracted  (see section  __Genotyping Process  and Quality__  in [phe.Rmd][]  or
+[phe.html][]).
 
 Make sure that the imputed genotype is have been download from UKB or accessable
 from the institution (i.e., MSU).
@@ -33,6 +34,8 @@ ls -gGhL dat/imp/000/*			# inspect the link
 
 [dwn.Rmd]: https://github.com/xiaoran831213/ukb/blob/master/src/dwn.Rmd "download from UKB, Rmarkdown"
 [dwn.html]: https://htmlpreview.github.io/?https://github.com/xiaoran831213/ukb/blob/master/doc/dwn.html "download from UKB, HTML"
+[phe.Rmd]: https://github.com/xiaoran831213/ukb/blob/master/src/phe.Rmd "extract phenotype, Rmarkdown"
+[phe.html]: https://htmlpreview.github.io/?https://github.com/xiaoran831213/ukb/blob/master/doc/phe.html "extract phenotype, HTML"
 
 # Extraction
 
