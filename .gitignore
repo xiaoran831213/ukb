@@ -44,3 +44,6 @@ dat;
 
 # backup scripts
 *~
+
+# R-markdown exported html under src
+src/*.html

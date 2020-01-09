@@ -877,7 +877,7 @@ At this point, directory __{p}/dat/phe/ill__ contains:
   * case: number of cases for both general and specific illnesses.
 
 
-```{sh, eval=TRUE}
+```{sh, eval=FALSE}
 p=$GRP/ukb; w=$p/dat/phe/ill; cd $w
 tree -d root
 ```
@@ -1241,7 +1241,7 @@ At this point, directory __{p}/dat/phe/can__ contains:
   * code: direct links to cancer by code number;
   * case: number of cases for both general and specific canceres.
 
-```{sh, eval=TRUE}
+```{sh, eval=FALSE}
 p=$GRP/ukb; w=$p/dat/phe/ill; cd $w
 tree -d root
 ```

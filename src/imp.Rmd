@@ -6,30 +6,33 @@ output: html_document
 
 # preperation
 
-Make sure the main phenotype has been downloaded from UKB (see dwn.Rmd), and
-variables describing  the process  and quality control  of genotyping  have been
-extracted (see __"phe.Rmd"__).
+Make sure  the main phenotype has  been downloaded from UKB  (see [dwn.Rmd][] or
+[dwn.html][]),  and variables  describing  the process  and  quality control  of
+genotyping have been extracted (see __"phe.Rmd"__).
 
-Make sure that the imputed genotype is  download from UKB or accessable from our
-institution (i.e., MSU).
+Make sure that the imputed genotype is have been download from UKB or accessable
+from the institution (i.e., MSU).
 
 The downloaded files are in Oxford  BGEN format, together with meta information,
 kept under __{s}/ukb/imp/000__.
 
-Note: here {s}  denote the root of  user's scrach space, which is  big enough to
-store and process  imputed genotype, but will be purged  after a specific period
-of time (44 days for MSU HPCC).
+**Note**: {s} denotes  the root of scratch  space, which is big  enough to store
+ and process  imputed genotype, but  will be purged  after a specific  period of
+ time (44 days for MSU HPCC).
 
-To ease future works, create a link from within __{p}/dat__ to imputed genotypes
-in __{s}/ukb/imp__.  Make sure the data is visible to other group members.
+To ease future  work, from within __{p}/dat__ create links  to imputed genotypes
+under __{s}/ukb/imp__.  Make sure the data is visible to other group members.
 
 ```{sh, eval=TRUE}
 p=$GRP/ukb; cd $p				# project directory - UKB related
-ln $SCR/ukb/imp dat/imp			# create link: dat/imp -> imputed
-ls -gGh dat/imp dat/imp/* -d	# inspect the link
+ln -sf $SCR/ukb/imp dat/imp		# create link: dat/imp -> imputed
+ls -gGhL dat/imp/000/*			# inspect the link
 ```
 
 -------------------------------------------------------------------------------
+
+[dwn.Rmd]: https://github.com/xiaoran831213/ukb/blob/master/src/dwn.Rmd "download from UKB, Rmarkdown"
+[dwn.html]: https://htmlpreview.github.io/?https://github.com/xiaoran831213/ukb/blob/master/doc/dwn.html "download from UKB, HTML"
 
 # Extraction
 
@@ -55,7 +58,7 @@ for i in {1..26}; do
 	# target exists?
 	if [ -e $o.pgen -a -e $o.psam -a -e $o.pvar ]; then echo "echo skip $o"; continue; fi
     
-    # list well-imputed common variants 
+    # list well-imputed variants 
     [ -e $o.mfi ] || awk <$s/$n.mfi      '$6>=.005 && $8>=.3' >$o.mfi
     [ -e $o.pos ] || awk <$o.mfi -v c=$i '{print c":"$3}'     >$o.pos
     [ -e $o.vid ] || awk <$o.mfi -v c=$i '{print $2}'         >$o.vid
@@ -63,7 +66,8 @@ for i in {1..26}; do
     # bgen -> pgen
     echo -n "time plink2 --bgen 000/$n.bgen ref-first --sample 000/$n.sample "
 	echo    "--extract $n.vid --make-pgen --out $n --memory 4096 --threads 1"
-done | hpcwp - -d$d -q1 --wtm 12 -m8 --ln $s --log none
+done | tee tmp.cmd
+hpcwp tmp.cmd -d$d -q1 --wtm 12 -m8 --ln $s --log none; rm tmp.cmd
 ```
 The extraction make took up to 8 hours for longer chromosomes.
 
@@ -87,7 +91,7 @@ call threshold specified in the previous step (extration).
 
 PLINK2 automatically takes special care of HWE test on X/Y Chromosome.
 
-```{Sh, eval=FALSE}
+```{sh, eval=FALSE}
 cd $GRP/ukb/dat/imp				# working directory
 s=001							# imputation extracted
 d=002; mkdir -p $d				# QC
@@ -100,33 +104,30 @@ done
 sort -m $s/*.svid | uniq -c | awk '$1>1 {print $2}' > $s/dp.svid
 
 for c in {01..23} 25; do		# chromosomes in UKB imputed data
-	echo -n "plink2 --pfile $s/$c --geno .05 --hwe 1e-6 "
-	echo -n "--exclude $s/dp.svid "
-	echo    "--make-pgen --out $c --memory 4097"
+	echo -n "plink2 --pfile $s/$c --geno .05 --hwe 1e-6 --exclude $s/dp.svid "
+	echo    "--make-just-pvar --out $c --memory 4096"
 done | hpcwp - -d$d -q1 -t1 -m8 --ln $s --log None
 ```
-The result is stored in **{s}/ukb/imp/002**.
+
+The result is  stored in **{s}/ukb/imp/002**, with only the  list of variants in
+\*.pvar format.
 
 
 ## Samples
 
-Use the following critera to retain/exclude samples:
+With the remaining variants, filter samples according to these criteria:
 
   * known genotyping outliers reported by UKB.
     - UKB variable __[22027][]__: Outliers for heterozygosity or missing rate
     - saved as __{p}/dat/phe/gno/out.txt__;
-	- see **phe.html** and **phe.Rmd** for more details.
+	- see [phe.Rmd][] and [phe.html][]  for more details.
   * callrate < 95% for any of the autosomes.
 	
-[22027]:http://biobank.ndph.ox.ac.uk/showcase/field.cgi?id=22027
-
 Be sure variant QC have been done, so more samples may pass.
-
 ```{sh, eval=FALSE}
-p=$GRP/ukb; cd $p				# project directory
-w=dat/imp; cd $w				# working directory
-s=002;							# outcome of QC
-d=003; mkdir -p $d				# non-duplicate
+cd $GRP/ukb/dat/imp				# working directory
+s=001;							# outcome of QC
+d=002; mkdir -p $d				# non-duplicate
 
 # gather genotyping outliers
 paste $p/dat/phe/{eid,gno/out}.txt | awk 'NR>1 && $2>0 {print $1}' > $d/outlier.id
@@ -134,7 +135,7 @@ paste $p/dat/phe/{eid,gno/out}.txt | awk 'NR>1 && $2>0 {print $1}' > $d/outlier.
 # samples failing QC for each autosomes
 for c in {01..22}; do
 	echo $c
-	plink2 --pfile $s/$c --mind .05  --make-just-fam --out $d/$c > /dev/null
+	plink2 --pfile $s/$c --extract $d/$c.pvar --mind .05 --make-just-psam --out $d/$c > /dev/null
 done
 
 # samples to be excluded
@@ -142,11 +143,28 @@ cat $d/*.mindrem.id $d/out.id | sort -u > $d/out.id
 
 # remove low quality samples
 for c in {01..23} 25; do
-	echo "plink2 --pfile $s/$c --remove out.id --make-pgen --out $c --memory 2048"
-done | hpcwp - -d$d -q1 -t2 -m4 --log none --ln $s
+	echo "plink2 --pfile $s/$c --extract $c.pvar --remove out.id --make-pgen --out $c --memory 4096"
+done | hpcwp - -d$d -q1 -t2 -m4.5 --log none --ln $s
 ```
-The results are put under **{p}/dat/imp/003**. 
+The results are saved to **{p}/dat/imp/002**, PLIN2 PGEN file sets.
 
+-------------------------------------------------------------------------------
+
+[phe.Rmd]: https://github.com/xiaoran831213/ukb/blob/master/src/phe.Rmd "Extracting phenotypes, (Rmarkdown document)"
+[phe.html]: https://htmlpreview.github.io/?https://github.com/xiaoran831213/ukb/blob/master/doc/phe.html "Extracting phenotypes (html)"
+[22027]:http://biobank.ndph.ox.ac.uk/showcase/field.cgi?id=22027
+
+## Merge variants
+
+Most of the time it is easier and faster to work with separated chromosomes, but
+a  merged table  of  variants in  PLINK  BIM  format is  still  useful for  some
+analysis:
+
+```{sh, eval=FALSE}
+cd $GRP/ukb/dat/imp/002
+for f in *.pgen; do plink2 --pfile ${f%.*} --make-just-bim --out ${f%.*}; done
+cat *.bim > ../002.bim
+```
 
 # Sample Selection
 
@@ -171,49 +189,15 @@ p=$GRP/ukb; cd $p				# project directory
 w=dat/imp;  cd $w				# working directory
 s=002							# imputed GT past QC
 d=003; mkdir -p $d				# unrelated Europeans
-e=xiaoran.tong.cn@gmail.com  # email
 
 # individuals: unrelated, no genotyping outliar, European ancestry only.
-paste $p/dat/phe/{eid.col,{dmg/eur,gno/{ur1,out}}.txt} > /tmp/idv
-awk </tmp/idv -v FS=$'\t' 'NR>1 && $2==1 && $3==1 && $4!=1 {print $1,$1}'> $d/kpp
+paste $p/dat/phe/{eid.col,{dmg/eur,gno/{ur1,out}}.txt} |
+    awk -v FS=$'\t' 'NR>1 && $2==1 && $3==1 && $4!=1 {print $1,$1}'> $d/kpp
 
 # qualified individuals
 for c in $s/*.bed; do
     c=${c%%.*}
     f=${c##*/}
-    echo "plink2 --bfile $c --keep kpp --make-bed --out $f --memory 4096"
-done | hpcwp - -d$d -q1 -t.5 -m8 --log None
+    echo "plink2 --pfile $c --keep kpp --make-bed --out $f --memory 4096"
+done | hpcwp - -d$d -q1 -t1 -m8 --log None
 ```
-
-# sample missing rate
-
-Remove pooly typed individuals with missing rate higher than 2% on any autosome.
-
-```{sh, eval=FALSE}
-p=$GRP/ukb			# project directory
-w=$GRP/ukb/dat/cal		# working directory
-s=$w/002			# after sample QC
-d=$w/003	        	# well-typed individuals
-
-# gather qualified individuals with respect to each chromosome
-mkdir -p $d
-for c in $s/*.bed; do
-    c=${c%%.*}
-    i=${c##*/}
-    plink --bfile $c --mind 0.02 --make-just-fam --out $d/$i
-done # | hpcwp - -d$d -q2 --wtm 2 -m8 --log None
-
-# count the time an individual passes QC on autosomes
-cat $d/{01..22}.fam | sort | uniq -c > $d/ct.fam
-
-# collect individuals qulified on all autosomes (i.e., 
-# pass count == 22)
-awk <ct.fam '$1==22 {print $2,$3}' > kp.iid
-
-for c in $s/*.bed; do
-    c=${c%%.*}
-    i=${c##*/}
-    plink --bfile $c --keep $d/kp.iid --make-bed --out $d/$i
-done
-```
-Collect qualified individuals.
