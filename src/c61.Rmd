@@ -1,0 +1,337 @@
+---
+title: "UK Biobank Prostate Cancer anslysis"
+author: "xiaoran"
+output: "html_document"
+theme: united
+---
+
+This  file document  the LDPRED  analysis  for prostate  cancer phenotype.   The
+majority of work  will be conducted under directory _{p}/dat/c61_,  where {p} is
+the root of UKB related works, c61 is the code for prostate cancer phenotype.
+
+# Preperation
+
+Create directory for prostate cancer analysis, link or download resources.
+
+  * imputed genotype
+    - already processed: {p}/dat/imp/002/, by chromosome
+  * phenotypes
+    - already processed: {p}/dat/phe/
+	  * eid.txt: individual ID 
+      * c61.txt: prostate cancer, 0 = control, 1 = case
+      * age.txt: age
+      * sex.txt: 0=female, 1=male
+	  * bri.txt: 0=non-British, 1=British
+      * gno/pc[1-5].txt: first 5 principle component
+	  * gno/arr: genotyping array (0 and 1)
+      * gno/pha: genotyping phases (0 and 1)
+  * GWAS summary statistics
+    - download from [here][gwas].
+  * LD Reference Genome for European population
+    - use 500 EUR  from 1000 Genome Project under {g}/eur/000,  where {g} is the
+      directory for KGP related work.
+  * Softwares
+    - plink1 and plink2
+    - [ldpred]
+
+[gwas]: http://practical.icr.ac.uk/blog/wp-content/uploads/uploadedfiles/oncoarray/MetaSummaryData/meta_v3_onco_euro_overall_ChrAll_1_release.zip
+[ldpred]: https://github.com/bvilhjal/ldpred
+
+```{sh, eval=FALSE}
+cd $GRP/ukb/dat
+y=c61
+mkdir -p $y             # directory for prostate cancer (c61)
+cd $y
+
+# link phenotypes
+ln -sf ../phe/{$y,eid,age,sex,dmg/{bri,eur},gno/{pc{1..5},pha,arr}}.txt ./
+
+# link genotypes, post QC, unrelated British, no outlier
+ln -sf ../imp/002     gno      # chromosomes
+ln -sf ../imp/002.bim gno.bim # table of variants in BIM format
+
+# link LD reference for EUR (in PLINK BED format)
+for e in {bed,bim,fam}; do
+    ln -sf $GRP/kgp/eur/000.$e ldr.$e
+done
+
+# download GWAS summary statistics
+cd $y
+[ -e gwa.txt.gz ] || (
+    wget http://practical.icr.ac.uk/blog/wp-content/uploads/uploadedfiles/oncoarray/MetaSummaryData/meta_v3_onco_euro_overall_ChrAll_1_release.zip
+    unzip meta_v3_onco_euro_overall_ChrAll_1_release.zip
+    mv meta_v3_onco_euro_overall_ChrAll_1_release.txt gwa.dwn
+    gzip gwa.dwn
+    rm meta_v3_onco_euro_overall_ChrAll_1_release.zip)
+```
+
+When done, genotype, phenotypes, and GWAS  summary are either link or downloaded
+into working directory {p}/dat/c61.
+
+```{sh, eval=TRUE}
+cd $GRP/ukb/dat/c61
+ls -gGh                         # inspect files
+
+plink  --version                # inspect softwares
+plink2 --version
+ldpred -h
+```
+
+
+Format GWAS summay to LDPRED format. Inspect the headers and the first few lines.
+
+```{sh, eval=TRUE}
+cd $GRP/ukb/dat/c61
+
+# the header
+zcat gwa.dwn.gz | head -n+1 | tr '\t' '\n' | awk '{print NR"\t"$0}'
+
+# first few lines
+zcat gwa.dwn.gz | tail -n+2 | head | column -t
+```
+
+Take out the following columns in order:
+
+  4.  Chr                 -> CHR
+  5.  position            -> POS
+  1.  MarkerName          -> SNP_ID
+  6.  allele1             -> REF
+  7.  allele2             -> ALT
+  8.  Freq1               -> REF_FRQ
+ 14.  Pvalue              -> PVAL
+ 12.  Effect              -> BETA
+ 13.  StdErr              -> SE
+      N                   <- 140254 (from meta info)
+  
+And exclude variants that
+
+  * non-SNP
+  * SNPs with A/T or C/G alleles (strand abiguity)
+
+```{sh, eval=FALSE}
+cd $GRP/ukb/dat/c61
+s=gwa.dwn.gz
+d=gwa.txt
+echo -e "CHR\tPOS\tSNP_ID\tREF\tALT\tREF_FRQ\tPVAL\tBETA\tSE\tN" > $d
+zcat gwa.dwn.gz | awk -v OFS=$'\t' '\
+    length($6$7)==2 && $6$7!~"[at][at]|[cg][cg]" \
+    {print $4,$5,$3,toupper($6),toupper($7),$8,$14,$12,$13,140254}' >>$d
+```
+
+
+# LDPRED step 1: Build LD Coordinate
+
+Use _ldpred coord_  which take LD reference (1000G), formated  GWAS summary, and
+the table of taget variants (in BIM format) as input.
+
+```{sh, eval=FALSE}
+cd $GRP/ukb/dat/c61
+cmd="ldpred coord --gf ldr --ssf gwa.txt --ssf-format LDPRED"
+
+(echo "$cmd --out ldc.gno --vbim gno.bim"
+ echo "$cmd --out ldc.hm3 --only-hm3"
+ echo "$cmd --out ldc.all" ) | hpcwp - -t8 -q1 -p4 -m96
+```
+
+# LDPRED step 2: SNP weights
+
+Use _ldpred gibbs_ to re-weight SNPs
+
+```{sh, eval=FALSE}
+cd $GRP/ukb/dat/c61				# working directory
+d=wgt; mkdir -p $d
+ln -sf ../ldc.{gno,hm3,all} $d/	# link to LD coordinates
+r=$[$(cat gno.bim | wc -l) / 4000]
+for f in {1.0000e+00,1.0000e-01,1.0000e-02,1.0000e-03,3.0000e-01,3.0000e-02,3.0000e-03}; do
+	for n in {gno,hm3,all}; do
+		[ -e $d/${n}_LDpred_p${f}* ] && continue
+		echo "ldpred gibbs --cf ldc.$n --ldr $r --ldf $n --N 140254 --out $n --f $f --hickle-ld"
+	done
+done | hpcwp - -d$d -t36 -p4 -q1 -m256
+```
+
+# LDPRED step 3: GPS scoring
+
+```{sh, eval=FALSE}
+cd $GRP/ukb/dat/c61
+d=gps; mkdir -p $d
+K=/dev/null
+ln -sf ../{gno,wgt} $d
+ln -sf ../
+for s in wgt/{hm3,gno,all}_LDpred_p[1-9I]*; do
+	t=${s%%_*}; t=${t##*/}		   # tag
+	r=${s#*_p}; r=${r%.*}		   # rho
+	for c in gno/{01..22}.pgen; do # chromosomes
+		c=${c%%.*}; i=${c##*/}	   # chromosome number
+		o=$t.p${r/[.]0000}.c$i	   # output
+		[ -e $d/$o.sscore ] && continue
+		echo -n "time plink2 --pfile $c --maf 0.005 --read-freq $c.afreq --score $s 3 4 7 header-read "
+		echo    " --out $o --threads 4 >$K"
+	done
+done | hpcwp - -d$d --wtm 3 -q22 -p4 -m32 --log none
+```
+
+Get sum of GPS, weighted by allele counts in each chromosome.
+
+```{r, eval=FALSE}
+setwd('/mnt/research/StatGen/ukb/dat/c61/gps')
+options(stringsAsFactors=FALSE)
+fns <- dir(".", "[.]c.*[.]sscore$") # chromosome polygenic scores
+gps <- read.delim(fns[1])           # typical GPS table
+spl <- strsplit(fns, '[.]')
+lst <- data.frame(fn=fns, crd=sapply(spl, `[`, 1), rho=sapply(spl, `[`, 2), chr=sapply(spl, `[`, 3))
+## group by LD-coord and rho
+for(grp in split(lst, subset(lst, se=c(crd, rho)), drop=TRUE))
+{
+    out <- with(grp[1, ], paste(crd, rho, "gps", sep="."))
+    if(file.exists(out))
+        next
+    cps <- lapply(grp$fn, function(f)
+    {
+        print(f)
+        r <- read.delim(f)
+        cbind(r[, 3], r[, 3] * r[, 5])
+    })
+    cps <- Reduce(`+`, cps)
+    gps[, 3] <- cps[, 1]
+    gps[, 5] <- cps[, 2] / cps[, 1]
+    print(out)
+    write.table(gps, out, quote=FALSE, sep='\t', row.names=FALSE)
+}
+```
+
+# Parse GPS
+
+Turn the GPS into a covariate aligned with the cohort by sample ID.
+
+```{sh, eval=FALSE}
+cd $GRP/ukb/dat/c61
+for f in gps/{hm3,gno,all}*.gps; do	# GPS
+	t=${f#*/}						# tag
+	t=${t%.*}
+    o=tmp.$t.gps; echo $o
+    echo $t > $o
+    join <(tail -n+2 eid.txt) <(sort $f -k1,1) -a1 -o2.5 >> $o
+done
+
+paste eid.txt tmp.*.gps > gps.txt
+rm tmp.*.gps
+```
+
+Save GPS in R Data format
+```{R, eval=FALSE}
+setwd('/mnt/research/StatGen/ukb/dat/c61/')
+options(stringsAsFactors=FALSE) # avoid factor trouble
+gps <- read.delim("gps.txt", row.names=1)
+saveRDS(gps, "gps.005")
+```
+
+The GPS  are saved to  __{p}/dat/c61/gps.txt__, each column corresponding  to LD
+ coordinates and $\rho$.
+ 
+Now align Qing Lu's GPS to Chong Wu's UKB copy.
+
+```{r, eval=FALSE}
+setwd('/mnt/research/StatGen/ukb/dat')
+
+## qlu.gps <- read.delim("c61/gps.txt")    # GPS by qlu's eid
+qlu.gps <- readRDS("c61/gps.010")    # GPS by qlu's eid
+cwu.qlu <- readRDS("phe/eid/cwu.qlu")   # cwu's eid to qlu's eid
+
+## replace Qlu's eid with Cwu's eid
+cwu.gps <- merge(cwu.qlu, qlu.gps, by.x=2, by.y=0)
+rownames(cwu.gps) <- cwu.gps$cwu
+cwu.gps <- within(cwu.gps, rm(cwu, qlu))
+saveRDS(cwu.gps, "~/cwu.gps.010")
+```
+
+
+# Analysis
+
+Regress C61 on known risk factors and genome-wide polygenic risk score (GPS). If
+the ID matching is correct, at least  the risk factors should be significant. If
+the GPS  is correctly  done, it  should be significant  as well,  and preferably
+improve the AUC slightly.
+
+Make  sure the  GPS has  been calculated,  see __ldp.Rmd__  or __ldp.html__  for
+details. For C61, the output was __{p}/dat/phe/cad/gps.txt__.
+
+```{R, eval=FALSE}
+setwd('/mnt/research/StatGen/ukb/dat/c61/')
+options(stringsAsFactors=FALSE) # avoid factor trouble
+library(pROC)                   # for AUC
+scn <- function(., w, ...) scan(., w, sep='\t', skip=1, quiet=TRUE, blank.lines.skip=FALSE, ...)
+
+## genome-wide polygenic score (all)
+gps <- readRDS("gps.010")
+
+dat <- data.frame(
+    row.names = scn("eid.txt", 0L),
+    c61 = scn("c61.txt", 0L),           # response
+    age = scn("age.txt", 0L),           # covariate
+    sex = scn("sex.txt", 0L),           # covariate
+    bri = scn("bri.txt", 0L),           # British?
+    pha = scn("pha.txt", 0L),           # genotyping phase
+    arr = scn("arr.txt", 0L),           # genotyping array
+    pc1 = scn("pc1.txt", .0),           # principle components
+    pc2 = scn("pc2.txt", .0),           # 
+    pc3 = scn("pc3.txt", .0),           # 
+    pc4 = scn("pc4.txt", .0))           # 
+
+kpp <- rowSums(is.na(gps))==0 & rowSums(is.na(dat))==0 & dat$sex==1
+
+dat <- dat[kpp, ]
+gps <- gps[kpp, ]
+
+m0 <- c61~age+pc1+pc2+pc3+pc4+arr
+m1 <- update(m0, c61~.+gps)
+m1 <- lapply(names(gps), function(i)
+{
+    print(i)
+    dat <- cbind(gps=gps[, i], dat)
+
+    ## models: GPS
+    m <- glm(m1, "binomial", subset(dat, pha == 0 & bri == 1))
+
+    ## AUC for training
+    h <- predict(m)
+    y <- with(dat, c61[pha == 0  & bri == 1])
+    auc.dvp <- as.numeric(auc(y, h))
+    
+    ## AUC for testing
+    h <- predict(m, newdata = subset(dat, pha == 1 & bri == 1))
+    y <- with(dat, c61[pha == 1  & bri == 1])
+    auc.evl <- as.numeric(auc(y, h))
+
+    ## AUC for non-British
+    h <- predict(m, newdata = subset(dat, bri == 0))
+    y <- with(dat, c61[bri == 0])
+    auc.nbr <- as.numeric(auc(y, h))
+    
+    data.frame(tag=i, mdl="gps", auc.dvp=auc.dvp, auc.evl=auc.evl, auc.nbr=auc.nbr)
+})
+m1 <- do.call(rbind, m1)
+
+## null models, without genotype
+m <- glm(m0, "binomial", subset(dat, pha==0 & bri == 1))
+
+## null model AUC for training
+h <- predict(m)
+y <- with(dat, c61[pha == 0 & bri == 1])
+auc.dvp <- as.numeric(auc(y, h))
+
+## null model AUC for testing
+h <- predict(m, newdata = subset(dat, pha == 1 & bri == 1))
+y <- with(dat, c61[pha == 1 & bri == 1])
+auc.evl <- as.numeric(auc(y, h))
+
+## AUC for non-British
+h <- predict(m, newdata = subset(dat, bri == 0))
+y <- with(dat, c61[bri == 0])
+auc.nbr <- as.numeric(auc(y, h))
+
+m0 <- data.frame(tag=NA, mdl="nul", auc.dvp=auc.dvp, auc.evl=auc.evl, auc.nbr=auc.nbr)
+ret <- rbind(m0, m1)
+rownames(ret) <- NULL
+saveRDS(ret, "ldp.rds")
+```
